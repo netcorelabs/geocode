@@ -1,32 +1,31 @@
-export async function handler(event) {
-  try {
-    const body = JSON.parse(event.body);
-    const HUBSPOT_TOKEN = process.env.HUBSPOT_PRIVATE_TOKEN;
+async function ensureProperty(propertyName) {
 
-    await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
-      method: "POST",
+  const response = await fetch(
+    `https://api.hubapi.com/crm/v3/properties/contacts/${propertyName}`,
+    {
       headers: {
-        "Authorization": `Bearer ${HUBSPOT_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        properties: {
-          email: body.email,
-          risk_score: body.risk_score,
-          crime_weighted_score: body.crime_weighted_score
-        }
-      })
-    });
+        Authorization: `Bearer ${process.env.HUBSPOT_PRIVATE_TOKEN}`
+      }
+    }
+  );
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ success: true })
-    };
+  if (response.status === 404) {
 
-  } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: err.message })
-    };
+    await fetch(
+      "https://api.hubapi.com/crm/v3/properties/contacts",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.HUBSPOT_PRIVATE_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: propertyName,
+          label: propertyName.replace(/_/g, " "),
+          type: "number",
+          fieldType: "number"
+        })
+      }
+    );
   }
 }
