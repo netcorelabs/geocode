@@ -1,0 +1,7 @@
+body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; }
+h2 { color: #333; text-align: center; margin-bottom: 20px; }
+.calculator-container { max-width: 400px; margin: 0 auto; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+.calculator-container label { display: block; margin-bottom: 10px; }
+.calculator-container input, .calculator-container select { width: 100%; padding: 8px; margin-top: 4px; }
+.calculator-container button { margin-top: 15px; padding: 10px 15px; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+.calculator-container button:hover { background: #0056b3; }
