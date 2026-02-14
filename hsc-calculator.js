@@ -1,4 +1,4 @@
-// 1️⃣ Store UTMs from landing page
+// Store any UTMs in localStorage
 function storeUTMs() {
     const params = new URLSearchParams(window.location.search);
     ["utm_source","utm_medium","utm_campaign","utm_term","utm_content"].forEach(key => {
@@ -8,12 +8,11 @@ function storeUTMs() {
 }
 storeUTMs();
 
-// 2️⃣ Render calculator after DOM loads
 document.addEventListener("DOMContentLoaded", function() {
     const root = document.getElementById("calculator-root");
     if(!root) return;
 
-    // Replace below with your actual calculator logic
+    // Render calculator (replace with your actual logic if needed)
     root.innerHTML = `
         <div class="calculator-container">
             <label>Home Value ($): <input type="number" id="home-value" /></label><br/>
@@ -28,16 +27,17 @@ document.addEventListener("DOMContentLoaded", function() {
         </div>
     `;
 
+    // On calculator submit
     const submitBtn = document.getElementById("calc-submit-btn");
     submitBtn.addEventListener("click", function() {
         const homeValue = document.getElementById("home-value").value;
         const level = document.getElementById("security-level").value;
 
-        // Save data to localStorage to pass to results page
+        // Save inputs to localStorage
         localStorage.setItem("calc_home_value", homeValue);
         localStorage.setItem("calc_security_level", level);
 
-        // Redirect to results page
+        // Redirect to Results page
         window.location.href = "https://hubspotgate.netlify.app/results.html";
     });
 });
