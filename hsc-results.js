@@ -1,82 +1,32 @@
-function renderRiskBadge(score) {
-function updateRiskUI(score, crime, homeRisk, protection) {
+document.addEventListener("DOMContentLoaded", function() {
+    const root = document.getElementById("results-root");
+    if(!root) return;
 
-  document.getElementById("riskScore").textContent = score;
+    // Retrieve calculator inputs from localStorage
+    const homeValue = localStorage.getItem("calc_home_value") || "N/A";
+    const securityLevel = localStorage.getItem("calc_security_level") || "N/A";
 
-  renderRiskBadge(score);
+    // Retrieve UTM info for analytics if needed
+    const utms = ["utm_source","utm_medium","utm_campaign","utm_term","utm_content"].reduce((acc, key) => {
+        acc[key] = localStorage.getItem(key) || "N/A";
+        return acc;
+    }, {});
 
- if (score >= 40) {
-  fireConversionEvent(score);
-}
+    // Render results (replace with your actual map/chart logic)
+    root.innerHTML = `
+        <p>🏠 Home Value: $${homeValue}</p>
+        <p>🔒 Security Level: ${securityLevel}</p>
+        <div id="crime-map" style="height:400px; border:1px solid #ccc;">
+            Map loading here...
+        </div>
+        <div id="utm-data" style="margin-top:20px; font-size:12px; color:#666;">
+            <p>UTM Data for tracking:</p>
+            <pre>${JSON.stringify(utms,null,2)}</pre>
+        </div>
+    `;
 
-
-}
-function fireConversionEvent(finalScore) {
-
-  // Prevent duplicate firing
-  if (window.hscConversionFired) return;
-  window.hscConversionFired = true;
-
-  const trafficSource = localStorage.getItem("utm_source") || "direct";
-
-  /* ===============================
-     GOOGLE ANALYTICS 4
-  =============================== */
-  if (window.gtag) {
-    gtag("event", "security_estimate_completed", {
-      risk_score: finalScore,
-      traffic_source: trafficSource
-    });
-  }
-
-  /* ===============================
-     FACEBOOK / META
-  =============================== */
-  if (window.fbq) {
-    fbq("trackCustom", "SecurityEstimateCompleted", {
-      riskScore: finalScore,
-      source: trafficSource
-    });
-  }
-
-  /* ===============================
-     OPTIONAL: HubSpot Event
-  =============================== */
-  if (window._hsq) {
-    _hsq.push([
-      "trackCustomBehavioralEvent",
-      {
-        name: "security_estimate_completed",
-        properties: {
-          risk_score: finalScore,
-          utm_source: trafficSource
-        }
-      }
-    ]);
-  }
-
-}
-
-  let label, color;
-
-  if (score < 40) {
-    label = "Low Risk";
-    color = "#16a34a";
-  } else if (score < 70) {
-    label = "Moderate Risk";
-    color = "#f59e0b";
-  } else {
-    label = "High Risk";
-    color = "#dc2626";
-  }
-
-  document.getElementById("riskBadge").innerHTML =
-    `<span style="
-      background:${color};
-      color:white;
-      padding:8px 16px;
-      border-radius:50px;
-      font-weight:600;">
-      ${label}
-    </span>`;
-}
+    // Example: Call your existing Netlify JS function for crime map
+    if(window.loadCrimeMap) {
+        window.loadCrimeMap("crime-map"); // Replace with your real map function
+    }
+});
