@@ -7,12 +7,23 @@
 <style>
 body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
 .hsc-results { padding:60px; background:linear-gradient(135deg,#fff,#e0f2fe); }
-.result-grid { display:grid; gap:40px; grid-template-columns:1fr 2fr; align-items:start; }
+.result-grid { display:grid; gap:20px; grid-template-columns:1fr 2fr; align-items:start; }
 .score-card { background:linear-gradient(135deg,#1e3a8a,#0ea5e9); color:white; padding:40px; border-radius:20px; text-align:center; }
 #riskScore { font-size:70px; margin:0; }
 .map-card { border-radius:20px; overflow:hidden; }
 #map { width:100%; height:450px; border-radius:20px; }
-@media(max-width:900px){ .result-grid { grid-template-columns:1fr; } #map{height:350px;} }
+.heatmap-legend { background:#fff; border-radius:12px; padding:20px; margin-top:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
+.heatmap-legend h4 { margin-top:0; }
+.heatmap-legend div { height:20px; margin:5px 0; border-radius:4px; color:#fff; display:flex; align-items:center; padding-left:10px; font-size:14px; }
+.legend-low { background:#00FF00; }   /* low crime */
+.legend-medium { background:#FFFF00; color:#000; } /* medium */
+.legend-high { background:#FF0000; }  /* high crime */
+.crime-data { background:#fff; padding:30px; border-radius:12px; margin-top:40px; box-shadow:0 2px 10px rgba(0,0,0,0.1);}
+.crime-data h3 { margin-top:0; }
+.crime-table { width:100%; border-collapse: collapse; margin-top:20px; }
+.crime-table th, .crime-table td { border:1px solid #ddd; padding:8px; text-align:left; }
+.crime-table th { background:#2563eb; color:#fff; }
+@media(max-width:900px){ .result-grid { grid-template-columns:1fr;} #map{height:350px;} }
 </style>
 </head>
 <body>
@@ -22,49 +33,113 @@ body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
     <div class="score-card">
       <h2 id="riskScore">--</h2>
       <p>Security Readiness Score</p>
+
+      <!-- Heatmap Legend Card -->
+      <div class="heatmap-legend">
+        <h4>Crime Heatmap Legend</h4>
+        <div class="legend-low">Green: Low Crime Areas</div>
+        <div class="legend-medium">Yellow: Moderate Crime Areas</div>
+        <div class="legend-high">Red: High Crime Areas</div>
+      </div>
     </div>
+
     <div class="map-card">
       <div id="map"></div>
     </div>
   </div>
 </section>
 
+<!-- Crime Data Section -->
+<section class="crime-data">
+  <h3>Local Crime Data (2022)</h3>
+  <p>Data sourced from the FBI Uniform Crime Reporting (UCR) program.</p>
+  <table class="crime-table" id="crimeTable">
+    <thead>
+      <tr><th>County</th><th>Violent Crime Count</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
 <script>
 document.addEventListener("DOMContentLoaded", function(){
+
   const params = new URLSearchParams(window.location.search);
   const address = params.get("address") || "Elberton, GA";
   const riskScore = params.get("riskScore") || 85;
 
   document.getElementById("riskScore").textContent = riskScore;
 
+  // --- Google Maps ---
   function loadGoogle() {
     const s = document.createElement("script");
-    s.src = "https://maps.googleapis.com/maps/api/js?key=AIzaSyCQjLZxTOSGUhHJ8__vymBaFTpLVAZcBzc&libraries=visualization";
+    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization";
     s.async=true; s.defer=true; s.onload=initMap;
     document.head.appendChild(s);
   }
 
+  async function fetchCrimeData(loc){
+    try{
+      const state = "GA";
+      const year = "2022";
+      const res = await fetch(`https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`);
+      const data = await res.json();
+      if(!data.results) return;
+
+      // Add to heatmap
+      const heatPoints = [];
+      const tbody = document.querySelector("#crimeTable tbody");
+      tbody.innerHTML="";
+
+      data.results.forEach(r=>{
+        const county = r.state_name + " County";
+        const count = r.actual || 0;
+
+        // Table row
+        const tr = document.createElement("tr");
+        const tdCounty = document.createElement("td");
+        tdCounty.textContent = r.state_name;
+        const tdCount = document.createElement("td");
+        tdCount.textContent = count.toLocaleString();
+        tr.appendChild(tdCounty);
+        tr.appendChild(tdCount);
+        tbody.appendChild(tr);
+
+        // Fake LatLng points around the main location (for demo)
+        const latOffset = loc.lat() + (Math.random()-0.5)*0.15;
+        const lngOffset = loc.lng() + (Math.random()-0.5)*0.15;
+        heatPoints.push({ location: new google.maps.LatLng(latOffset,lngOffset), weight: count });
+      });
+
+      // Add heatmap layer
+      const heatmap = new google.maps.visualization.HeatmapLayer({
+        data: heatPoints.map(p=>({location:p.location, weight:p.weight})),
+        radius: 30
+      });
+      heatmap.setMap(map);
+
+    }catch(e){
+      console.error("FBI API error", e);
+    }
+  }
+
+  let map;
   function initMap(){
     const geocoder = new google.maps.Geocoder();
     geocoder.geocode({address:address}, function(results,status){
       if(status!=="OK" || !results[0]) return;
       const loc = results[0].geometry.location;
-      const map = new google.maps.Map(document.getElementById("map"), {zoom:13, center:loc});
-      new google.maps.Marker({position:loc, map:map});
 
-      // Heatmap points for demo
-      const heatPoints=[];
-      for(let i=0;i<50;i++){
-        const latOffset=loc.lat()+(Math.random()-0.5)*0.05;
-        const lngOffset=loc.lng()+(Math.random()-0.5)*0.05;
-        heatPoints.push(new google.maps.LatLng(latOffset,lngOffset));
-      }
+      map = new google.maps.Map(document.getElementById("map"), {zoom:13, center:loc});
+      new google.maps.Marker({position:loc,map:map});
 
-      new google.maps.visualization.HeatmapLayer({data:heatPoints,radius:25}).setMap(map);
+      // Load heatmap + crime table
+      fetchCrimeData(loc);
     });
   }
 
   loadGoogle();
+
 });
 </script>
 
