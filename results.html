@@ -73,7 +73,7 @@ document.addEventListener("DOMContentLoaded", function(){
   // --- Google Maps ---
   function loadGoogle() {
     const s = document.createElement("script");
-    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization";
+    s.src = "https://maps.googleapis.com/maps/api/js?key=AIzaSyCQjLZxTOSGUhHJ8__vymBaFTpLVAZcBzc&libraries=visualization";
     s.async=true; s.defer=true; s.onload=initMap;
     document.head.appendChild(s);
   }
@@ -82,7 +82,8 @@ document.addEventListener("DOMContentLoaded", function(){
     try{
       const state = "GA";
       const year = "2022";
-      const res = await fetch(`https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`);
+      const res = await fetch(`https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=42GSm43A0bBabt6tm5ZZpej8dkEBDEdHYjm3TEtn
+`);
       const data = await res.json();
       if(!data.results) return;
 
