@@ -1,7 +1,91 @@
-<section class="hsc-calculator">
-  <h2>Smart Home Security Calculator</h2>
-  <div id="calculator-root"></div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Smart Home Cost Estimator | Home Secure Calculator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="module.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a href="/">
+      <img src="https://245087053.fs1.hubspotusercontent-na2.net/hubfs/245087053/homesecurecalclogo.jpg"
+           alt="Home Secure Calculator"
+           class="site-logo"/>
+    </a>
+  </div>
+</header>
+
+<main>
+
+<section id="calculator" class="calculator-section">
+  <div class="container calculator-grid">
+
+    <div class="calc-form">
+      <h2>Build Your Estimate</h2>
+
+      <!-- HOME SIZE -->
+      <div class="calc-step">
+        <h3>Home Size</h3>
+        <select id="homeSize">
+          <option value="under1000">&lt; 1,000 sq ft</option>
+          <option value="1000_1999">1,000–1,999 sq ft</option>
+          <option value="2000_2999">2,000–2,999 sq ft</option>
+          <option value="3000_3999">3,000–3,999 sq ft</option>
+          <option value="4000plus">4,000+ sq ft</option>
+        </select>
+      </div>
+
+      <!-- PROJECT LEVEL -->
+      <div class="calc-step">
+        <h3>Project Level</h3>
+        <label><input type="radio" name="complexity" value="basic" checked> Starter</label>
+        <label><input type="radio" name="complexity" value="standard"> Standard</label>
+        <label><input type="radio" name="complexity" value="premium"> Premium</label>
+      </div>
+
+      <!-- INSTALL -->
+      <div class="calc-step">
+        <h3>Installation</h3>
+        <select id="installType">
+          <option value="diy">DIY Install</option>
+          <option value="pro">Professional Install</option>
+        </select>
+      </div>
+
+    </div>
+
+    <!-- SUMMARY -->
+    <aside class="calc-summary">
+      <div class="summary-card">
+        <h3>Your Smart Home Estimate</h3>
+        <div class="summary-main">
+          <div>
+            <span>Equipment + Install</span>
+            <p id="summaryTotal">$0</p>
+          </div>
+          <div>
+            <span>Monitoring</span>
+            <p id="summaryMonitoring">$0/mo</p>
+          </div>
+        </div>
+
+        <h4>Included Devices</h4>
+        <ul id="summaryBullets"></ul>
+      </div>
+    </aside>
+
+  </div>
 </section>
 
-<script src="https://hubspotgate.netlify.app/js/hsc-calculator.js"></script>
-<link rel="stylesheet" href="https://hubspotgate.netlify.app/css/hsc-calculator.css" />
+<footer>
+<p>© <span id="year"></span> Home Secure Calculator</p>
+</footer>
+
+<script src="module.js"></script>
+</body>
+</html>
+
+
