@@ -1,187 +1,140 @@
-(function(){
+(function () {
 
-document.addEventListener("DOMContentLoaded", async function() {
+  document.addEventListener("DOMContentLoaded", function () {
 
-  const root = document.getElementById("results-root");
-  if (!root) return;
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-  // Try to get address from URL first, then fallback to localStorage
-  const params = new URLSearchParams(window.location.search);
-  const address = params.get("address") || localStorage.getItem("lead_address") || "Atlanta, GA";
-  const riskScore = params.get("riskScore") || 85;
+    const params = new URLSearchParams(window.location.search);
 
-  document.getElementById("riskScore").textContent = riskScore;
+    const address =
+      params.get("address") ||
+      localStorage.getItem("lead_address") ||
+      "Atlanta, GA";
 
-  // Load Google Maps async
-  function loadGoogle() {
-    const s = document.createElement("script");
-    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization,marker";
-    s.async = true;
-    s.defer = true;
-    s.onload = initMap;
-    document.head.appendChild(s);
-  }
+    const riskScore =
+      params.get("riskScore") ||
+      localStorage.getItem("riskScore") ||
+      85;
 
-  function initMap() {
-    const geocoder = new google.maps.Geocoder();
+    const scoreEl = document.getElementById("riskScore");
+    if (scoreEl) scoreEl.textContent = riskScore;
 
-    geocoder.geocode({ address: address }, function(results, status) {
-      if (status !== "OK" || !results[0]) {
-        console.error("Geocoding failed", status);
+    loadGoogleMaps();
+
+    function loadGoogleMaps() {
+
+      if (window.google && window.google.maps) {
+        initMap();
         return;
       }
 
-      const loc = results[0].geometry.location;
+      const script = document.createElement("script");
 
-      const map = new google.maps.Map(document.getElementById("map"), {
-        zoom: 13,
-        center: loc
+      script.src =
+        "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_KEY&libraries=visualization,marker&callback=initMap";
+
+      script.async = true;
+      script.defer = true;
+
+      document.head.appendChild(script);
+    }
+
+    window.initMap = function () {
+
+      const geocoder = new google.maps.Geocoder();
+
+      geocoder.geocode({ address: address }, function (results, status) {
+
+        if (status !== "OK" || !results[0]) {
+          console.error("Geocode failed:", status);
+          return;
+        }
+
+        const loc = results[0].geometry.location;
+
+        const map = new google.maps.Map(document.getElementById("map"), {
+          zoom: 13,
+          center: loc,
+          mapId: "DEMO_MAP_ID"
+        });
+
+        new google.maps.marker.AdvancedMarkerElement({
+          map: map,
+          position: loc
+        });
+
+        fetchCrimeData(map, loc);
+
       });
 
-      // Use AdvancedMarkerElement instead of deprecated Marker
-      new google.maps.marker.AdvancedMarkerElement({
-        map: map,
-        position: loc,
-      });
+    };
 
-      // Call function to fetch crime data
-      fetchCrimeData(map, loc);
-    });
-  }
+    async function fetchCrimeData(map, loc) {
 
-  async function fetchCrimeData(map, loc) {
-    try {
-      const state = "GA"; // could dynamically detect from address
-      const year = "2022";
+      try {
 
-      const res = await fetch(
-        `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`
-      );
-      const data = await res.json();
-      if (!data.results) return;
+        // OPTIONAL: You can improve this later by extracting state dynamically
+        const state = "GA";
+        const year = "2022";
 
-      const heatPoints = [];
+        const response = await fetch(`/api/crime?state=${state}&year=${year}`);
 
-      data.results.forEach(r => {
-        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
-        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
-        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
-      });
+        if (!response.ok) {
+          throw new Error("Crime API proxy failed");
+        }
 
-      const heatmap = new google.maps.visualization.HeatmapLayer({
-        data: heatPoints,
-        radius: 35
-      });
+        const data = await response.json();
 
-      heatmap.setMap(map);
-    } catch (e) {
-      console.error("FBI API error", e);
-    }
-  }
+        if (!data.results || !Array.isArray(data.results)) {
+          document.getElementById("crime-summary").textContent =
+            "No crime data available.";
+          return;
+        }
 
-  loadGoogle();
-});
-</script>
+        let totalViolentCrimes = 0;
+        const heatPoints = [];
 
-  root.innerHTML = "<p>Loading your security report...</p>";
+        data.results.forEach((r) => {
 
-  try {
+          totalViolentCrimes += r.actual || 0;
 
-    // 1️⃣ Get email from URL
-    const params = new URLSearchParams(window.location.search);
-    const email = params.get("email");
+          // Randomized spread (replace later with real lat/lng dataset if available)
+          const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
+          const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
 
-    if (!email) {
-      root.innerHTML = "<p>Missing session email.</p>";
-      return;
-    }
+          heatPoints.push(
+            new google.maps.LatLng(latOffset, lngOffset)
+          );
 
-    // 2️⃣ Get stored data (HubSpot domain localStorage)
-    const address = localStorage.getItem("lead_address");
-    const homeValue = localStorage.getItem("calc_home_value");
-    const securityLevel = localStorage.getItem("calc_security_level");
+        });
 
-    if (!address) {
-      root.innerHTML = "<p>Missing address data.</p>";
-      return;
-    }
+        const heatmap = new google.maps.visualization.HeatmapLayer({
+          data: heatPoints,
+          radius: 35
+        });
 
-    // 3️⃣ Geocode address
-    const geoRes = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=AIzaSyCQjLZxTOSGUhHJ8__vymBaFTpLVAZcBzc`
-    );
+        heatmap.setMap(map);
 
-    const geoData = await geoRes.json();
+        const summaryEl = document.getElementById("crime-summary");
 
-    if (!geoData.results || !geoData.results.length) {
-      root.innerHTML = "<p>Unable to locate address.</p>";
-      return;
-    }
+        if (summaryEl) {
+          summaryEl.innerHTML =
+            `Total Violent Crimes in ${state} (${year}): 
+             <strong>${totalViolentCrimes.toLocaleString()}</strong>. 
+             Heatmap reflects density relative to the selected location.`;
+        }
 
-    const { lat, lng } = geoData.results[0].geometry.location;
+      } catch (error) {
 
-    // 4️⃣ Get crime score from Netlify
-    const crimeRes = await fetch(
-      `https://hubspotgate.netlify.app/.netlify/functions/crime-score?lat=${lat}&lng=${lng}`
-    );
+        console.error("Crime proxy error:", error);
 
-    const crimeData = await crimeRes.json();
+        const summaryEl = document.getElementById("crime-summary");
+        if (summaryEl) {
+          summaryEl.textContent = "Error loading crime data.";
+        }
 
-    if (!crimeRes.ok) {
-      root.innerHTML = "<p>Unable to retrieve crime data.</p>";
-      return;
-    }
-
-    const riskScore = crimeData.weightedCrimeScore;
-    const riskLevel = crimeData.riskLevel;
-    const totalCrimes = crimeData.totalCrimes;
-
-    // 5️⃣ Simple cost logic example
-    const equipmentCost = Number(homeValue || 0) * 0.01;
-    const installCost = 199;
-    const monitoringCost = securityLevel === "premium" ? 59 : 
-                           securityLevel === "standard" ? 39 : 19;
-
-    // 6️⃣ Display results
-    root.innerHTML = `
-      <div class="result-card">
-        <p><strong>Address:</strong> ${address}</p>
-        <p><strong>Total Crimes (1mi):</strong> ${totalCrimes}</p>
-        <p><strong>Crime Score:</strong> ${riskScore}</p>
-        <p><strong>Risk Level:</strong> ${riskLevel}</p>
-        <hr/>
-        <p><strong>Recommended Plan:</strong> ${securityLevel}</p>
-        <p><strong>Equipment Estimate:</strong> $${equipmentCost.toFixed(2)}</p>
-        <p><strong>Installation:</strong> $${installCost}</p>
-        <p><strong>Monitoring:</strong> $${monitoringCost}/mo</p>
-      </div>
-    `;
-
-    // 7️⃣ Update HubSpot Contact
-    await fetch(
-      "https://hubspotgate.netlify.app/.netlify/functions/hubspotUpdate",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          riskScore,
-          systemSummary: `${riskLevel} risk area`,
-          equipment: equipmentCost,
-          install: installCost,
-          monitoring: monitoringCost,
-          devices: ["Alarm Panel", "Door Sensors", "Camera"],
-          address
-        })
       }
-    );
 
-  } catch (err) {
-    root.innerHTML = "<p>Unexpected error loading results.</p>";
-    console.error(err);
-  }
+    }
 
-});
+  });
 
 })();
