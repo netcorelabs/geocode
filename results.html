@@ -52,7 +52,7 @@ body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
 <!-- Crime Data Section -->
 <section class="crime-data">
   <h3>Local Crime Data (2022)</h3>
-  <p>Data sourced from the FBI Uniform Crime Reporting (UCR) program.</p>
+  <p>Data is sourced from FBI Uniform Crime Reporting (mock data for demo).</p>
   <table class="crime-table" id="crimeTable">
     <thead>
       <tr><th>County</th><th>Violent Crime Count</th></tr>
@@ -64,78 +64,70 @@ body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
 <script>
 document.addEventListener("DOMContentLoaded", function(){
 
+  // --- URL Parameters ---
   const params = new URLSearchParams(window.location.search);
   const address = params.get("address") || "Elberton, GA";
-  const riskScore = params.get("riskScore") || 85;
-
+  const riskScore = parseInt(params.get("riskScore")) || 85;
   document.getElementById("riskScore").textContent = riskScore;
+
+  // --- Static/mock crime data ---
+  const crimeData = [
+    {county: "Elbert", lat:34.11, lng:-82.86, count:12},
+    {county: "Hart", lat:34.35, lng:-82.88, count:20},
+    {county: "Franklin", lat:34.33, lng:-83.09, count:8},
+    {county: "Madison", lat:34.10, lng:-83.23, count:18},
+    {county: "Oglethorpe", lat:33.88, lng:-83.24, count:5}
+  ];
 
   // --- Google Maps ---
   function loadGoogle() {
     const s = document.createElement("script");
-    s.src = "https://maps.googleapis.com/maps/api/js?key=AIzaSyCQjLZxTOSGUhHJ8__vymBaFTpLVAZcBzc&libraries=visualization";
+    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization";
     s.async=true; s.defer=true; s.onload=initMap;
     document.head.appendChild(s);
   }
 
-  async function fetchCrimeData(loc){
-    try{
-      const state = "GA";
-      const year = "2022";
-      const res = await fetch(`https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=42GSm43A0bBabt6tm5ZZpej8dkEBDEdHYjm3TEtn
-`);
-      const data = await res.json();
-      if(!data.results) return;
-
-      // Add to heatmap
-      const heatPoints = [];
-      const tbody = document.querySelector("#crimeTable tbody");
-      tbody.innerHTML="";
-
-      data.results.forEach(r=>{
-        const county = r.state_name + " County";
-        const count = r.actual || 0;
-
-        // Table row
-        const tr = document.createElement("tr");
-        const tdCounty = document.createElement("td");
-        tdCounty.textContent = r.state_name;
-        const tdCount = document.createElement("td");
-        tdCount.textContent = count.toLocaleString();
-        tr.appendChild(tdCounty);
-        tr.appendChild(tdCount);
-        tbody.appendChild(tr);
-
-        // Fake LatLng points around the main location (for demo)
-        const latOffset = loc.lat() + (Math.random()-0.5)*0.15;
-        const lngOffset = loc.lng() + (Math.random()-0.5)*0.15;
-        heatPoints.push({ location: new google.maps.LatLng(latOffset,lngOffset), weight: count });
-      });
-
-      // Add heatmap layer
-      const heatmap = new google.maps.visualization.HeatmapLayer({
-        data: heatPoints.map(p=>({location:p.location, weight:p.weight})),
-        radius: 30
-      });
-      heatmap.setMap(map);
-
-    }catch(e){
-      console.error("FBI API error", e);
-    }
+  function getHeatColor(weight){
+    if(weight < 10) return "#00FF00";
+    else if(weight < 20) return "#FFFF00";
+    else return "#FF0000";
   }
 
   let map;
   function initMap(){
     const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({address:address}, function(results,status){
+    geocoder.geocode({address: address}, function(results,status){
       if(status!=="OK" || !results[0]) return;
       const loc = results[0].geometry.location;
 
-      map = new google.maps.Map(document.getElementById("map"), {zoom:13, center:loc});
-      new google.maps.Marker({position:loc,map:map});
+      // Center map
+      map = new google.maps.Map(document.getElementById("map"), {zoom:12, center:loc});
 
-      // Load heatmap + crime table
-      fetchCrimeData(loc);
+      // Advanced marker for main location
+      new google.maps.marker.AdvancedMarkerElement({
+        map: map,
+        position: loc,
+        title: "Your Location"
+      });
+
+      // Heatmap points
+      const heatPoints = crimeData.map(c => ({
+        location: new google.maps.LatLng(c.lat,c.lng),
+        weight: c.count
+      }));
+      const heatmap = new google.maps.visualization.HeatmapLayer({data: heatPoints, radius:30});
+      heatmap.setMap(map);
+
+      // Populate crime table
+      const tbody = document.querySelector("#crimeTable tbody");
+      tbody.innerHTML="";
+      crimeData.forEach(c=>{
+        const tr=document.createElement("tr");
+        const tdCounty=document.createElement("td"); tdCounty.textContent=c.county;
+        const tdCount=document.createElement("td"); tdCount.textContent=c.count;
+        tr.appendChild(tdCounty); tr.appendChild(tdCount);
+        tbody.appendChild(tr);
+      });
     });
   }
 
