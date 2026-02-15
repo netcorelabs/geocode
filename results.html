@@ -6,13 +6,13 @@
 <title>Smart Home Security Results</title>
 <style>
 body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
-.hsc-results { padding: 60px; background: linear-gradient(135deg,#ffffff,#e0f2fe); }
-.result-grid { display: grid; gap: 40px; grid-template-columns: 1fr 2fr; align-items: start; }
-.score-card { background: linear-gradient(135deg,#1e3a8a,#0ea5e9); color: white; padding: 40px; border-radius: 20px; text-align:center; }
-#riskScore { font-size: 70px; margin:0; }
-.map-card { border-radius: 20px; overflow: hidden; }
+.hsc-results { padding:60px; background:linear-gradient(135deg,#fff,#e0f2fe); }
+.result-grid { display:grid; gap:40px; grid-template-columns:1fr 2fr; align-items:start; }
+.score-card { background:linear-gradient(135deg,#1e3a8a,#0ea5e9); color:white; padding:40px; border-radius:20px; text-align:center; }
+#riskScore { font-size:70px; margin:0; }
+.map-card { border-radius:20px; overflow:hidden; }
 #map { width:100%; height:450px; border-radius:20px; }
-@media(max-width:900px){ .result-grid { grid-template-columns:1fr; } #map { height:350px; } }
+@media(max-width:900px){ .result-grid { grid-template-columns:1fr; } #map{height:350px;} }
 </style>
 </head>
 <body>
@@ -31,78 +31,5 @@ body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
 
 <script>
 document.addEventListener("DOMContentLoaded", function(){
-
-  // Injected API keys via Netlify environment variables (build-time replacement)
-  const RAPIDAPI_KEY = "__RAPIDAPI_KEY__"; // replace with Netlify env var during deploy
-  const GOOGLE_KEY = "__GOOGLE_KEY__"; // replace with your Google Maps key
-
-  // Parse URL params
   const params = new URLSearchParams(window.location.search);
-  const address = params.get("address") || "Elberton, GA";
-  const riskScore = params.get("riskScore") || 85;
-  document.getElementById("riskScore").textContent = riskScore;
-
-  // Load Google Maps
-  function loadGoogle(){
-    const s = document.createElement("script");
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_KEY}&libraries=visualization`;
-    s.async = true;
-    s.defer = true;
-    s.onload = initMap;
-    document.head.appendChild(s);
-  }
-
-  function initMap(){
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({address: address}, function(results, status){
-      if(status !== "OK" || !results[0]) return;
-
-      const loc = results[0].geometry.location;
-      const map = new google.maps.Map(document.getElementById("map"), {
-        zoom: 13,
-        center: loc
-      });
-
-      new google.maps.Marker({ position: loc, map: map });
-
-      fetchCrimeData(map, loc);
-    });
-  }
-
-  async function fetchCrimeData(map, loc){
-    try {
-      const state = "GA"; // optionally detect from address
-      const year = "2022";
-
-      const res = await fetch(
-        `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=${RAPIDAPI_KEY}`
-      );
-
-      const data = await res.json();
-      if(!data.results) return;
-
-      const heatPoints = data.results.map(r => {
-        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
-        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
-        return new google.maps.LatLng(latOffset, lngOffset);
-      });
-
-      const heatmap = new google.maps.visualization.HeatmapLayer({
-        data: heatPoints,
-        radius: 35
-      });
-
-      heatmap.setMap(map);
-
-    } catch(e){
-      console.error("FBI API error", e);
-    }
-  }
-
-  loadGoogle();
-
-});
-</script>
-
-</body>
-</html>
+  const addr
