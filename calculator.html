@@ -93,26 +93,22 @@ document.addEventListener("DOMContentLoaded", function(){
 
   function getComplexity(){ return Array.from(complexityEls).find(r=>r.checked).value; }
 
-  // New: Calculate Risk Score (0–100) based on selections
   function calculateRiskScore(){
     const homeSize = homeSizeEl.value;
     const complexity = getComplexity();
     const installType = installTypeEl.value;
 
-    let score = 50; // base score
+    let score = 50;
 
-    // Larger homes → higher score
     if(homeSize=="under1000") score += 5;
     else if(homeSize=="1000_1999") score +=10;
     else if(homeSize=="2000_2999") score +=20;
     else if(homeSize=="3000_3999") score +=30;
     else score +=40;
 
-    // Complexity increases score
     if(complexity=="standard") score +=10;
     else if(complexity=="premium") score +=20;
 
-    // Pro install reduces risk slightly
     if(installType=="pro") score -=5;
 
     if(score>100) score=100;
@@ -139,8 +135,7 @@ document.addEventListener("DOMContentLoaded", function(){
       summaryBulletsEl.appendChild(li);
     });
 
-    const riskScore = calculateRiskScore();
-    riskScoreDisplayEl.textContent = riskScore;
+    riskScoreDisplayEl.textContent = calculateRiskScore();
   }
 
   [homeSizeEl, installTypeEl, ...complexityEls].forEach(el=>el.addEventListener("change", updateEstimate));
@@ -152,6 +147,7 @@ document.addEventListener("DOMContentLoaded", function(){
     const targetUrl = `/results.html?address=${encodeURIComponent(address)}&riskScore=${riskScore}`;
     window.location.href = targetUrl;
   });
+
 });
 </script>
 </body>
