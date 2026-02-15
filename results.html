@@ -1,122 +1,37 @@
-<section class="hsc-results">
-
-  <!-- Score Card -->
-  <div class="result-grid">
-    <div class="score-card">
-      <h2 id="riskScore">--</h2>
-      <p>Security Readiness Score</p>
-      <!-- Heatmap Legend -->
-      <div class="heatmap-legend">
-        <h4>Heatmap Legend</h4>
-        <p>
-          Blue: Low crime density<br>
-          Yellow: Moderate crime density<br>
-          Red: High crime density
-        </p>
-      </div>
-    </div>
-
-    <!-- Map Card -->
-    <div class="map-card">
-      <div id="map" style="width:100%;height:450px;border-radius:20px;"></div>
-    </div>
-  </div>
-
-  <!-- Crime Data Section -->
-  <section class="crime-data-section">
-    <h3>Crime Data Summary</h3>
-    <p id="crime-summary">Loading...</p>
-  </section>
-
-</section>
-
-<style>
-.hsc-results {
-  padding:60px;
-  background:linear-gradient(135deg,#ffffff,#e0f2fe);
-  font-family:"Segoe UI", sans-serif;
-}
-
-.result-grid {
-  display:grid;
-  gap:40px;
-  grid-template-columns:1fr 1fr;
-}
-
-.score-card {
-  background:linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color:white;
-  padding:40px;
-  border-radius:20px;
-  text-align:center;
-}
-
-#riskScore { font-size:70px; margin-bottom:10px; }
-
-.heatmap-legend {
-  margin-top:20px;
-  background: rgba(255,255,255,0.2);
-  padding:15px;
-  border-radius:10px;
-  font-size:14px;
-  text-align:left;
-}
-
-.map-card {
-  border-radius:20px;
-  overflow:hidden;
-  box-shadow:0 10px 30px rgba(0,0,0,0.1);
-}
-
-.crime-data-section {
-  margin-top:50px;
-  background:#f4f6f9;
-  padding:30px;
-  border-radius:14px;
-  box-shadow:0 6px 20px rgba(0,0,0,0.05);
-}
-
-.crime-data-section h3 {
-  margin-bottom:15px;
-  color:#111827;
-}
-
-.crime-data-section p {
-  font-size:16px;
-  color:#374151;
-}
-@media(max-width:992px){
-  .result-grid { grid-template-columns:1fr; }
-}
-</style>
-
 <script>
 document.addEventListener("DOMContentLoaded", function() {
 
-  // Get address and score
-  const params = new URLSearchParams(window.location.search);
-  const address = params.get("address") || localStorage.getItem("lead_address") || "Atlanta, GA";
-  const riskScore = params.get("riskScore") || 85;
+  const address =
+    new URLSearchParams(window.location.search).get("address") ||
+    localStorage.getItem("lead_address") ||
+    "Atlanta, GA";
+
+  const riskScore =
+    new URLSearchParams(window.location.search).get("riskScore") || 85;
+
   document.getElementById("riskScore").textContent = riskScore;
 
-  // Load Google Maps asynchronously
-  function loadGoogleMaps(apiKey, callback){
-    if(window.google && google.maps) return callback();
-    const s = document.createElement("script");
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=visualization,marker&callback=initMap`;
-    s.async = true;
-    s.defer = true;
-    document.head.appendChild(s);
-    window.initMap = callback;
+  function loadGoogleMaps() {
+
+    const script = document.createElement("script");
+
+    script.src =
+      "https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_MAPS_KEY }}&libraries=visualization,marker&callback=initMap";
+
+    script.async = true;
+    script.defer = true;
+
+    document.head.appendChild(script);
   }
 
-  loadGoogleMaps("AIzaSyCQjLZxTOSGUhHJ8__vymBaFTpLVAZcBzc", initMap);
+  window.initMap = function() {
 
-  function initMap(){
     const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({address: address}, function(results, status){
-      if(status !== "OK" || !results[0]){
-        console.error("Geocoding failed", status);
+
+    geocoder.geocode({ address: address }, function(results, status) {
+
+      if (status !== "OK" || !results[0]) {
+        console.error("Geocode failed:", status);
         return;
       }
 
@@ -124,57 +39,20 @@ document.addEventListener("DOMContentLoaded", function() {
 
       const map = new google.maps.Map(document.getElementById("map"), {
         zoom: 13,
-        center: loc
+        center: loc,
+        mapId: "DEMO_MAP_ID"
       });
 
-      // Use AdvancedMarkerElement
       new google.maps.marker.AdvancedMarkerElement({
-        map: map,
+        map,
         position: loc
       });
 
-      // Fetch crime data
-      fetchCrimeData(map, loc);
     });
-  }
 
-  async function fetchCrimeData(map, loc){
-    try {
-      const state = "GA"; // could detect dynamically
-      const year = "2022";
+  };
 
-      const res = await fetch(`https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`);
-      const data = await res.json();
-
-      if(!data.results){
-        document.getElementById("crime-summary").textContent = "No crime data available.";
-        return;
-      }
-
-      const heatPoints = [];
-      let totalViolentCrimes = 0;
-
-      data.results.forEach(r=>{
-        totalViolentCrimes += r.actual;
-        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
-        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
-        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
-      });
-
-      const heatmap = new google.maps.visualization.HeatmapLayer({
-        data: heatPoints,
-        radius: 35
-      });
-      heatmap.setMap(map);
-
-      document.getElementById("crime-summary").innerHTML =
-        `Total Violent Crimes in ${state} (${year}): <strong>${totalViolentCrimes.toLocaleString()}</strong>. Heatmap shows density near your location.`;
-
-    } catch(e){
-      console.error("FBI API error", e);
-      document.getElementById("crime-summary").textContent = "Error loading crime data.";
-    }
-  }
+  loadGoogleMaps();
 
 });
 </script>
