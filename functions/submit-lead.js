@@ -1,6 +1,6 @@
 export async function handler(event) {
 
-  // 1️⃣ Handle preflight
+  // Handle preflight
   if (event.httpMethod === "OPTIONS") {
     return {
       statusCode: 200,
@@ -56,17 +56,15 @@ export async function handler(event) {
   } catch (err) {
     return { statusCode: 500, headers: corsHeaders(event.headers.origin), body: JSON.stringify({ error: err.message }) };
   }
-}
+};
 
-// CORS headers helper
+// CORS helper
 function corsHeaders(origin) {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
     "https://hubspotgate.netlify.app"
   ];
-
   const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
-
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Headers": "Content-Type",
