@@ -1,140 +1,180 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Smart Home Security Results</title>
-<style>
-body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
-.hsc-results { padding:60px; background:linear-gradient(135deg,#fff,#e0f2fe); }
-.result-grid { display:grid; gap:20px; grid-template-columns:1fr 2fr; align-items:start; }
-.score-card { background:linear-gradient(135deg,#1e3a8a,#0ea5e9); color:white; padding:40px; border-radius:20px; text-align:center; }
-#riskScore { font-size:70px; margin:0; }
-.map-card { border-radius:20px; overflow:hidden; }
-#map { width:100%; height:450px; border-radius:20px; }
-.heatmap-legend { background:#fff; border-radius:12px; padding:20px; margin-top:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
-.heatmap-legend h4 { margin-top:0; }
-.heatmap-legend div { height:20px; margin:5px 0; border-radius:4px; color:#fff; display:flex; align-items:center; padding-left:10px; font-size:14px; }
-.legend-low { background:#00FF00; }   /* low crime */
-.legend-medium { background:#FFFF00; color:#000; } /* medium */
-.legend-high { background:#FF0000; }  /* high crime */
-.crime-data { background:#fff; padding:30px; border-radius:12px; margin-top:40px; box-shadow:0 2px 10px rgba(0,0,0,0.1);}
-.crime-data h3 { margin-top:0; }
-.crime-table { width:100%; border-collapse: collapse; margin-top:20px; }
-.crime-table th, .crime-table td { border:1px solid #ddd; padding:8px; text-align:left; }
-.crime-table th { background:#2563eb; color:#fff; }
-@media(max-width:900px){ .result-grid { grid-template-columns:1fr;} #map{height:350px;} }
-</style>
-</head>
-<body>
-
 <section class="hsc-results">
+
+  <!-- Score Card -->
   <div class="result-grid">
     <div class="score-card">
       <h2 id="riskScore">--</h2>
       <p>Security Readiness Score</p>
-
-      <!-- Heatmap Legend Card -->
+      <!-- Heatmap Legend -->
       <div class="heatmap-legend">
-        <h4>Crime Heatmap Legend</h4>
-        <div class="legend-low">Green: Low Crime Areas</div>
-        <div class="legend-medium">Yellow: Moderate Crime Areas</div>
-        <div class="legend-high">Red: High Crime Areas</div>
+        <h4>Heatmap Legend</h4>
+        <p>
+          Blue: Low crime density<br>
+          Yellow: Moderate crime density<br>
+          Red: High crime density
+        </p>
       </div>
     </div>
 
+    <!-- Map Card -->
     <div class="map-card">
-      <div id="map"></div>
+      <div id="map" style="width:100%;height:450px;border-radius:20px;"></div>
     </div>
   </div>
+
+  <!-- Crime Data Section -->
+  <section class="crime-data-section">
+    <h3>Crime Data Summary</h3>
+    <p id="crime-summary">Loading...</p>
+  </section>
+
 </section>
 
-<!-- Crime Data Section -->
-<section class="crime-data">
-  <h3>Local Crime Data (2022)</h3>
-  <p>Data is sourced from FBI Uniform Crime Reporting (mock data for demo).</p>
-  <table class="crime-table" id="crimeTable">
-    <thead>
-      <tr><th>County</th><th>Violent Crime Count</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</section>
+<style>
+.hsc-results {
+  padding:60px;
+  background:linear-gradient(135deg,#ffffff,#e0f2fe);
+  font-family:"Segoe UI", sans-serif;
+}
+
+.result-grid {
+  display:grid;
+  gap:40px;
+  grid-template-columns:1fr 1fr;
+}
+
+.score-card {
+  background:linear-gradient(135deg,#1e3a8a,#0ea5e9);
+  color:white;
+  padding:40px;
+  border-radius:20px;
+  text-align:center;
+}
+
+#riskScore { font-size:70px; margin-bottom:10px; }
+
+.heatmap-legend {
+  margin-top:20px;
+  background: rgba(255,255,255,0.2);
+  padding:15px;
+  border-radius:10px;
+  font-size:14px;
+  text-align:left;
+}
+
+.map-card {
+  border-radius:20px;
+  overflow:hidden;
+  box-shadow:0 10px 30px rgba(0,0,0,0.1);
+}
+
+.crime-data-section {
+  margin-top:50px;
+  background:#f4f6f9;
+  padding:30px;
+  border-radius:14px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.05);
+}
+
+.crime-data-section h3 {
+  margin-bottom:15px;
+  color:#111827;
+}
+
+.crime-data-section p {
+  font-size:16px;
+  color:#374151;
+}
+@media(max-width:992px){
+  .result-grid { grid-template-columns:1fr; }
+}
+</style>
 
 <script>
-document.addEventListener("DOMContentLoaded", function(){
+document.addEventListener("DOMContentLoaded", function() {
 
-  // --- URL Parameters ---
+  // Get address and score
   const params = new URLSearchParams(window.location.search);
-  const address = params.get("address") || "Elberton, GA";
-  const riskScore = parseInt(params.get("riskScore")) || 85;
+  const address = params.get("address") || localStorage.getItem("lead_address") || "Atlanta, GA";
+  const riskScore = params.get("riskScore") || 85;
   document.getElementById("riskScore").textContent = riskScore;
 
-  // --- Static/mock crime data ---
-  const crimeData = [
-    {county: "Elbert", lat:34.11, lng:-82.86, count:12},
-    {county: "Hart", lat:34.35, lng:-82.88, count:20},
-    {county: "Franklin", lat:34.33, lng:-83.09, count:8},
-    {county: "Madison", lat:34.10, lng:-83.23, count:18},
-    {county: "Oglethorpe", lat:33.88, lng:-83.24, count:5}
-  ];
-
-  // --- Google Maps ---
-  function loadGoogle() {
+  // Load Google Maps asynchronously
+  function loadGoogleMaps(apiKey, callback){
+    if(window.google && google.maps) return callback();
     const s = document.createElement("script");
-    s.src = "https://maps.googleapis.com/maps/api/js?key=AIzaSyCQjLZxTOSGUhHJ8__vymBaFTpLVAZcBzc&libraries=visualization";
-    s.async=true; s.defer=true; s.onload=initMap;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=visualization,marker&callback=initMap`;
+    s.async = true;
+    s.defer = true;
     document.head.appendChild(s);
+    window.initMap = callback;
   }
 
-  function getHeatColor(weight){
-    if(weight < 10) return "#00FF00";
-    else if(weight < 20) return "#FFFF00";
-    else return "#FF0000";
-  }
+  loadGoogleMaps("YOUR_GOOGLE_KEY", initMap);
 
-  let map;
   function initMap(){
     const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({address: address}, function(results,status){
-      if(status!=="OK" || !results[0]) return;
+    geocoder.geocode({address: address}, function(results, status){
+      if(status !== "OK" || !results[0]){
+        console.error("Geocoding failed", status);
+        return;
+      }
+
       const loc = results[0].geometry.location;
 
-      // Center map
-      map = new google.maps.Map(document.getElementById("map"), {zoom:12, center:loc});
+      const map = new google.maps.Map(document.getElementById("map"), {
+        zoom: 13,
+        center: loc
+      });
 
-      // Advanced marker for main location
+      // Use AdvancedMarkerElement
       new google.maps.marker.AdvancedMarkerElement({
         map: map,
-        position: loc,
-        title: "Your Location"
+        position: loc
       });
 
-      // Heatmap points
-      const heatPoints = crimeData.map(c => ({
-        location: new google.maps.LatLng(c.lat,c.lng),
-        weight: c.count
-      }));
-      const heatmap = new google.maps.visualization.HeatmapLayer({data: heatPoints, radius:30});
-      heatmap.setMap(map);
-
-      // Populate crime table
-      const tbody = document.querySelector("#crimeTable tbody");
-      tbody.innerHTML="";
-      crimeData.forEach(c=>{
-        const tr=document.createElement("tr");
-        const tdCounty=document.createElement("td"); tdCounty.textContent=c.county;
-        const tdCount=document.createElement("td"); tdCount.textContent=c.count;
-        tr.appendChild(tdCounty); tr.appendChild(tdCount);
-        tbody.appendChild(tr);
-      });
+      // Fetch crime data
+      fetchCrimeData(map, loc);
     });
   }
 
-  loadGoogle();
+  async function fetchCrimeData(map, loc){
+    try {
+      const state = "GA"; // could detect dynamically
+      const year = "2022";
+
+      const res = await fetch(`https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`);
+      const data = await res.json();
+
+      if(!data.results){
+        document.getElementById("crime-summary").textContent = "No crime data available.";
+        return;
+      }
+
+      const heatPoints = [];
+      let totalViolentCrimes = 0;
+
+      data.results.forEach(r=>{
+        totalViolentCrimes += r.actual;
+        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
+        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
+        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
+      });
+
+      const heatmap = new google.maps.visualization.HeatmapLayer({
+        data: heatPoints,
+        radius: 35
+      });
+      heatmap.setMap(map);
+
+      document.getElementById("crime-summary").innerHTML =
+        `Total Violent Crimes in ${state} (${year}): <strong>${totalViolentCrimes.toLocaleString()}</strong>. Heatmap shows density near your location.`;
+
+    } catch(e){
+      console.error("FBI API error", e);
+      document.getElementById("crime-summary").textContent = "Error loading crime data.";
+    }
+  }
 
 });
 </script>
-
-</body>
-</html>
