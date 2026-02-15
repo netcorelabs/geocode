@@ -32,4 +32,41 @@ body { margin:0; font-family:"Segoe UI", sans-serif; background:#f4f6f9; }
 <script>
 document.addEventListener("DOMContentLoaded", function(){
   const params = new URLSearchParams(window.location.search);
-  const addr
+  const address = params.get("address") || "Elberton, GA";
+  const riskScore = params.get("riskScore") || 85;
+
+  document.getElementById("riskScore").textContent = riskScore;
+
+  function loadGoogle() {
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization";
+    s.async=true; s.defer=true; s.onload=initMap;
+    document.head.appendChild(s);
+  }
+
+  function initMap(){
+    const geocoder = new google.maps.Geocoder();
+    geocoder.geocode({address:address}, function(results,status){
+      if(status!=="OK" || !results[0]) return;
+      const loc = results[0].geometry.location;
+      const map = new google.maps.Map(document.getElementById("map"), {zoom:13, center:loc});
+      new google.maps.Marker({position:loc, map:map});
+
+      // Heatmap points for demo
+      const heatPoints=[];
+      for(let i=0;i<50;i++){
+        const latOffset=loc.lat()+(Math.random()-0.5)*0.05;
+        const lngOffset=loc.lng()+(Math.random()-0.5)*0.05;
+        heatPoints.push(new google.maps.LatLng(latOffset,lngOffset));
+      }
+
+      new google.maps.visualization.HeatmapLayer({data:heatPoints,radius:25}).setMap(map);
+    });
+  }
+
+  loadGoogle();
+});
+</script>
+
+</body>
+</html>
