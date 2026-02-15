@@ -29,7 +29,7 @@
       const script = document.createElement("script");
 
       script.src =
-        "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_KEY&libraries=visualization,marker&callback=initMap";
+        "https://maps.googleapis.com/maps/api/js?key=AIzaSyC7EeMaBJWTgZ8ZdtyjjJFfzTv_ZpuhmLA&libraries=visualization,marker&callback=initMap";
 
       script.async = true;
       script.defer = true;
