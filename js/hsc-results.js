@@ -4,6 +4,85 @@ document.addEventListener("DOMContentLoaded", async function() {
 
   const root = document.getElementById("results-root");
   if (!root) return;
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  // Try to get address from URL first, then fallback to localStorage
+  const params = new URLSearchParams(window.location.search);
+  const address = params.get("address") || localStorage.getItem("lead_address") || "Atlanta, GA";
+  const riskScore = params.get("riskScore") || 85;
+
+  document.getElementById("riskScore").textContent = riskScore;
+
+  // Load Google Maps async
+  function loadGoogle() {
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization,marker";
+    s.async = true;
+    s.defer = true;
+    s.onload = initMap;
+    document.head.appendChild(s);
+  }
+
+  function initMap() {
+    const geocoder = new google.maps.Geocoder();
+
+    geocoder.geocode({ address: address }, function(results, status) {
+      if (status !== "OK" || !results[0]) {
+        console.error("Geocoding failed", status);
+        return;
+      }
+
+      const loc = results[0].geometry.location;
+
+      const map = new google.maps.Map(document.getElementById("map"), {
+        zoom: 13,
+        center: loc
+      });
+
+      // Use AdvancedMarkerElement instead of deprecated Marker
+      new google.maps.marker.AdvancedMarkerElement({
+        map: map,
+        position: loc,
+      });
+
+      // Call function to fetch crime data
+      fetchCrimeData(map, loc);
+    });
+  }
+
+  async function fetchCrimeData(map, loc) {
+    try {
+      const state = "GA"; // could dynamically detect from address
+      const year = "2022";
+
+      const res = await fetch(
+        `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`
+      );
+      const data = await res.json();
+      if (!data.results) return;
+
+      const heatPoints = [];
+
+      data.results.forEach(r => {
+        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
+        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
+        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
+      });
+
+      const heatmap = new google.maps.visualization.HeatmapLayer({
+        data: heatPoints,
+        radius: 35
+      });
+
+      heatmap.setMap(map);
+    } catch (e) {
+      console.error("FBI API error", e);
+    }
+  }
+
+  loadGoogle();
+});
+</script>
 
   root.innerHTML = "<p>Loading your security report...</p>";
 
