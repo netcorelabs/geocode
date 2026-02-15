@@ -1,0 +1,249 @@
+/* ===============================
+   GLOBAL
+================================= */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f4f6f9;
+  color: #111827;
+  line-height: 1.6;
+}
+
+.container {
+  width: 90%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ===============================
+   HEADER
+================================= */
+
+.site-header {
+  background: #ffffff;
+  padding: 20px 0;
+  text-align: center;
+}
+
+.site-logo {
+  height: 55px;
+}
+
+/* ===============================
+   CALCULATOR SECTION
+================================= */
+
+.calculator-section {
+  padding: 60px 0;
+}
+
+.calculator-grid {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  gap: 40px;
+  align-items: start;
+}
+
+/* ===============================
+   FORM SIDE
+================================= */
+
+.calc-form h2 {
+  margin-bottom: 25px;
+  font-size: 28px;
+}
+
+.calc-step {
+  margin-bottom: 30px;
+}
+
+.calc-step h3 {
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+select {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  font-size: 16px;
+  background: #fff;
+}
+
+input[type="radio"] {
+  margin-right: 8px;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+/* ===============================
+   SUMMARY CARD
+================================= */
+
+.calc-summary {
+  position: sticky;
+  top: 30px;
+}
+
+.summary-card {
+  background: #ffffff;
+  padding: 30px;
+  border-radius: 14px;
+  box-shadow: 0 15px 40px rgba(0,0,0,0.08);
+  border: 1px solid #e5e7eb;
+}
+
+.summary-card h3 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 22px;
+}
+
+.summary-main {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.summary-main span {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+#summaryTotal {
+  font-size: 28px;
+  font-weight: bold;
+  color: #111827;
+  margin: 5px 0 0;
+}
+
+#summaryMonitoring {
+  font-size: 20px;
+  font-weight: 600;
+  color: #2563eb;
+  margin: 5px 0 0;
+}
+
+.summary-card h4 {
+  margin-top: 25px;
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+#summaryBullets {
+  padding-left: 20px;
+  margin: 0;
+}
+
+#summaryBullets li {
+  margin-bottom: 8px;
+  font-size: 15px;
+}
+
+/* ===============================
+   LEAD SECTION
+================================= */
+
+.lead-section {
+  padding: 60px 0;
+
+  /* GRADIENT TOP TO BOTTOM */
+  background: linear-gradient(to bottom, #d1d5db, #ffffff);
+
+  text-align: center;
+}
+
+.lead-section h2 {
+  margin-bottom: 15px;
+  font-size: 26px;
+}
+
+.lead-section p {
+  max-width: 600px;
+  margin: 0 auto 25px;
+  color: #4b5563;
+}
+
+#hubspot-form {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* ===============================
+   FOOTER
+================================= */
+
+footer {
+  text-align: center;
+  padding: 30px 0;
+  background: #111;
+  color: #fff;
+  font-size: 14px;
+}
+
+/* ===============================
+   BUTTON STYLES
+================================= */
+
+button,
+.btn-primary {
+  display: inline-block;
+  padding: 14px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: #1e40af;
+}
+
+button {
+  background: #111827;
+  color: #fff;
+}
+
+button:hover {
+  background: #000;
+}
+
+/* ===============================
+   RESPONSIVE
+================================= */
+
+@media (max-width: 992px) {
+
+  .calculator-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .calc-summary {
+    position: relative;
+    top: 0;
+  }
+
+  .summary-main {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+}
