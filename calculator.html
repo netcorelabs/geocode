@@ -1,139 +1,73 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>Smart Home Cost Estimator | Home Secure Calculator</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Home Calculator</title>
 <style>
-/* ===== Global ===== */
-* { box-sizing: border-box; }
-body { margin:0; font-family: Arial, Helvetica, sans-serif; background: #f4f6f9; color: #111827; line-height:1.6; }
-.container { width:90%; max-width:1200px; margin:0 auto; }
-
-/* ===== Header ===== */
-.site-header { background:#fff; padding:20px 0; text-align:center; }
-.site-logo { height:55px; }
-
-/* ===== Calculator Section ===== */
-.calculator-section { padding:60px 0; }
-.calculator-grid { display:grid; grid-template-columns:1fr 420px; gap:40px; align-items:start; }
-.calc-form h2 { margin-bottom:25px; font-size:28px; }
-.calc-step { margin-bottom:30px; }
-.calc-step h3 { margin-bottom:10px; font-size:18px; }
-select { width:100%; padding:12px; border-radius:8px; border:1px solid #d1d5db; font-size:16px; background:#fff; }
-input[type="radio"] { margin-right:8px; }
-label { display:block; margin-bottom:8px; font-size:16px; cursor:pointer; }
-
-/* ===== Summary Card ===== */
-.calc-summary { position:sticky; top:30px; }
-.summary-card { background:#fff; padding:30px; border-radius:14px; box-shadow:0 15px 40px rgba(0,0,0,0.08); border:1px solid #e5e7eb; }
-.summary-card h3 { margin-top:0; margin-bottom:20px; font-size:22px; }
-.summary-main { display:flex; justify-content:space-between; margin-bottom:20px; }
-.summary-main span { font-size:14px; color:#6b7280; }
-#summaryTotal { font-size:28px; font-weight:bold; color:#111827; margin:5px 0 0; }
-#summaryMonitoring { font-size:20px; font-weight:600; color:#2563eb; margin:5px 0 0; }
-.summary-card h4 { margin-top:25px; margin-bottom:10px; font-size:18px; }
-#summaryBullets { padding-left:20px; margin:0; }
-#summaryBullets li { margin-bottom:8px; font-size:15px; }
-
-/* ===== Lead Section ===== */
-.lead-section { padding:60px 0; background:linear-gradient(to bottom, #d1d5db, #ffffff); text-align:center; }
-.lead-section h2 { margin-bottom:15px; font-size:26px; }
-#hubspot-form { max-width:600px; margin:0 auto; }
-
-/* ===== Footer ===== */
-footer { text-align:center; padding:30px 0; background:#111; color:#fff; font-size:14px; }
-
-/* ===== Responsive ===== */
-@media(max-width:992px){
-  .calculator-grid { grid-template-columns:1fr; }
-  .calc-summary { position:relative; top:0; }
-  .summary-main { flex-direction:column; gap:15px; }
-}
+/* Minimal styles for clarity */
+body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; }
+.container { max-width:1200px; margin:0 auto; padding:40px; }
+.calc-form { background:#fff; padding:30px; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,0.1); }
+.calc-form h2 { margin-top:0; }
+.calc-step { margin-bottom:20px; }
+select,input[type=radio] { width:100%; padding:10px; margin-top:5px; }
+.summary-card { background:#fff; padding:20px; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.05); margin-top:20px; }
+button { padding:12px 20px; border:none; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-size:16px; margin-top:20px; }
+button:hover { background:#1e40af; }
 </style>
 </head>
 <body>
 
-<header class="site-header">
-  <div class="container header-inner">
-    <a href="/">
-      <img src="https://245087053.fs1.hubspotusercontent-na2.net/hubfs/245087053/homesecurecalclogo.jpg"
-           alt="Home Secure Calculator"
-           class="site-logo"/>
-    </a>
-  </div>
-</header>
+<div class="container">
 
-<main>
-<section id="calculator" class="calculator-section">
-  <div class="container calculator-grid">
+  <div class="calc-form">
+    <h2>Build Your Estimate</h2>
 
-    <div class="calc-form">
-      <h2>Build Your Estimate</h2>
-
-      <div class="calc-step">
-        <h3>Home Size</h3>
-        <select id="homeSize">
-          <option value="under1000">&lt; 1,000 sq ft</option>
-          <option value="1000_1999">1,000–1,999 sq ft</option>
-          <option value="2000_2999">2,000–2,999 sq ft</option>
-          <option value="3000_3999">3,000–3,999 sq ft</option>
-          <option value="4000plus">4,000+ sq ft</option>
-        </select>
-      </div>
-
-      <div class="calc-step">
-        <h3>Project Level</h3>
-        <label><input type="radio" name="complexity" value="basic" checked> Starter</label>
-        <label><input type="radio" name="complexity" value="standard"> Standard</label>
-        <label><input type="radio" name="complexity" value="premium"> Premium</label>
-      </div>
-
-      <div class="calc-step">
-        <h3>Installation</h3>
-        <select id="installType">
-          <option value="diy">DIY Install</option>
-          <option value="pro">Professional Install</option>
-        </select>
-      </div>
+    <div class="calc-step">
+      <label>Home Size</label>
+      <select id="homeSize">
+        <option value="under1000">&lt; 1,000 sq ft</option>
+        <option value="1000_1999">1,000–1,999 sq ft</option>
+        <option value="2000_2999">2,000–2,999 sq ft</option>
+        <option value="3000_3999">3,000–3,999 sq ft</option>
+        <option value="4000plus">4,000+ sq ft</option>
+      </select>
     </div>
 
-    <aside class="calc-summary">
-      <div class="summary-card">
-        <h3>Your Smart Home Estimate</h3>
-        <div class="summary-main">
-          <div>
-            <span>Equipment + Install</span>
-            <p id="summaryTotal">$0</p>
-          </div>
-          <div>
-            <span>Monitoring</span>
-            <p id="summaryMonitoring">$0/mo</p>
-          </div>
-        </div>
+    <div class="calc-step">
+      <label>Project Level</label>
+      <label><input type="radio" name="complexity" value="basic" checked> Starter</label>
+      <label><input type="radio" name="complexity" value="standard"> Standard</label>
+      <label><input type="radio" name="complexity" value="premium"> Premium</label>
+    </div>
 
-        <h4>Included Devices</h4>
-        <ul id="summaryBullets"></ul>
-      </div>
-    </aside>
+    <div class="calc-step">
+      <label>Installation</label>
+      <select id="installType">
+        <option value="diy">DIY Install</option>
+        <option value="pro">Professional Install</option>
+      </select>
+    </div>
 
+    <div class="summary-card">
+      <h3>Your Estimate</h3>
+      <p>Equipment + Install: <span id="summaryTotal">$0</span></p>
+      <p>Monitoring: <span id="summaryMonitoring">$0/mo</span></p>
+      <p>Included Devices:</p>
+      <ul id="summaryBullets"></ul>
+    </div>
+
+    <button id="btnResults">Get Your Full Breakdown & Recommendations</button>
   </div>
-</section>
-
-<section id="lead-form" class="lead-section">
-  <div class="container">
-    <h2>Get Your Full Breakdown & Recommendations</h2>
-    <div id="hubspot-form"></div>
-  </div>
-</section>
-
-<footer>
-<p>© <span id="year"></span> Home Secure Calculator</p>
-</footer>
+</div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function(){
-  document.getElementById("year").textContent = new Date().getFullYear();
+  // Prefill address/email from URL params
+  const params = new URLSearchParams(window.location.search);
+  const address = params.get("address") || "";
+  const email = params.get("email") || "";
 
   const homeSizeEl = document.getElementById("homeSize");
   const installTypeEl = document.getElementById("installType");
@@ -144,76 +78,7 @@ document.addEventListener("DOMContentLoaded", function(){
   const summaryBulletsEl = document.getElementById("summaryBullets");
 
   const equipmentPrices = {
-    under1000: { basic: 300, standard: 500, premium: 800 },
-    "1000_1999": { basic: 500, standard: 900, premium: 1500 },
-    "2000_2999": { basic: 800, standard: 1500, premium: 2500 },
-    "3000_3999": { basic: 1200, standard: 2200, premium: 3500 },
-    "4000plus": { basic: 2000, standard: 3500, premium: 5000 }
-  };
-
-  const installMultipliers = { diy:1, pro:1.25 };
-  const monitoringPrices = { basic:25, standard:50, premium:75 };
-  const deviceList = {
-    basic:["2–3 Security Cameras","1 Video Doorbell","2–3 Entry Sensors","Smart Lock (1)","Basic Alarm Panel"],
-    standard:["4–6 Security Cameras","Video Doorbell","4–6 Entry Sensors","Smart Lock(s)","Smart Thermostat","Smart Lighting (3–5 zones)","Smart Alarm System"],
-    premium:["6+ Security Cameras","Video Doorbell + Chimes","Full Entry Sensor Coverage","Whole-Home Smart Locks","Smart Thermostats","Full Lighting Automation","Advanced Alarm System","Voice Assistant Integration","Custom Automation Scenes"]
-  };
-
-  function getComplexity(){ return Array.from(complexityEls).find(r=>r.checked).value; }
-
-  function updateEstimate(){
-    const homeSize = homeSizeEl.value;
-    const complexity = getComplexity();
-    const installType = installTypeEl.value;
-
-    const baseCost = equipmentPrices[homeSize][complexity];
-    const totalCost = baseCost * installMultipliers[installType];
-    const monitoring = monitoringPrices[complexity];
-
-    summaryTotalEl.textContent = "$"+Math.round(totalCost).toLocaleString();
-    summaryMonitoringEl.textContent = "$"+monitoring+"/mo";
-
-    summaryBulletsEl.innerHTML="";
-    deviceList[complexity].forEach(d=>{
-      const li=document.createElement("li");
-      li.textContent=d;
-      summaryBulletsEl.appendChild(li);
-    });
-  }
-
-  [homeSizeEl, installTypeEl, ...complexityEls].forEach(el => el.addEventListener("change", updateEstimate));
-  updateEstimate();
-
-  // HubSpot Form Injection using Netlify environment variables
-  const HUBSPOT_PORTAL_ID = "__HUBSPOT_PORTAL_ID__";
-  const HUBSPOT_FORM_ID = "__HUBSPOT_FORM_ID__";
-
-  if(window.hbspt && HUBSPOT_PORTAL_ID && HUBSPOT_FORM_ID){
-    hbspt.forms.create({
-      portalId: HUBSPOT_PORTAL_ID,
-      formId: HUBSPOT_FORM_ID,
-      target: "#hubspot-form",
-      onFormReady: function($form){
-        window.hsEstimatorForm = $form[0];
-        const params = new URLSearchParams(window.location.search);
-        const email = params.get("email");
-        const address = params.get("address");
-        if(email) $form[0].querySelector('input[type="email"]').value = email;
-        if(address){
-          let addrInput = $form[0].querySelector('input[name="address"]');
-          if(!addrInput){
-            addrInput = document.createElement("input");
-            addrInput.type="hidden";
-            addrInput.name="address";
-            $form[0].appendChild(addrInput);
-          }
-          addrInput.value = address;
-        }
-      }
-    });
-  }
-});
-</script>
-<script src="https://js.hsforms.net/forms/embed/v2.js"></script>
-</body>
-</html>
+    under1000:{basic:300, standard:500, premium:800},
+    "1000_1999":{basic:500, standard:900, premium:1500},
+    "2000_2999":{basic:800, standard:1500, premium:2500},
+    "3000_3999":{basic:1200, standard:2200_
