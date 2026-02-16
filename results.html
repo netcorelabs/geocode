@@ -1,33 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Home Security Results</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 40px; }
+  .summary-card { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 30px; }
+  h2, h3 { margin-top: 0; }
+  ul { margin: 10px 0 0 20px; }
+  #map { width: 100%; height: 400px; border-radius: 12px; margin-top: 20px; }
+  .info { margin-top: 10px; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="summary-card">
+    <h2>Your Smart Home Estimate</h2>
+    <p><strong>Name:</strong> <span id="leadName">--</span></p>
+    <p><strong>Email:</strong> <span id="leadEmail">--</span></p>
+    <p><strong>Address:</strong> <span id="leadAddress">--</span></p>
+    <p><strong>Estimated Risk Score:</strong> <span id="riskScore">--</span></p>
+
+    <h3>Equipment + Install</h3>
+    <p><strong>Total:</strong> <span id="summaryTotal">$0</span></p>
+    <p><strong>Monitoring:</strong> <span id="summaryMonitoring">$0/mo</span></p>
+
+    <h3>Included Devices</h3>
+    <ul id="summaryBullets"></ul>
+  </div>
+
+  <div id="map"></div>
+</div>
+
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+
   // ------------------------------
-  // Get calculator + lead data from sessionStorage
+  // Retrieve calculator + lead data
   // ------------------------------
   const resultsData = JSON.parse(sessionStorage.getItem("calc_results") || "{}");
 
-  // Fallbacks if sessionStorage empty
   const address = resultsData.address || "Atlanta, GA";
   const riskScore = resultsData.riskScore || 85;
+  const firstname = resultsData.firstname || "";
+  const lastname = resultsData.lastname || "";
+  const email = resultsData.email || "";
+  const homeSize = resultsData.homeSize || "1000_1999";
+  const complexity = resultsData.complexity || "standard";
+  const installType = resultsData.installType || "diy";
 
-  // Display risk score
-  const riskEl = document.getElementById("riskScore");
-  if (riskEl) riskEl.textContent = riskScore;
-
-  // Optional: display lead info
-  const leadNameEl = document.getElementById("leadName");
-  if (leadNameEl) leadNameEl.textContent = `${resultsData.firstname || ""} ${resultsData.lastname || ""}`;
-  const emailEl = document.getElementById("leadEmail");
-  if (emailEl) emailEl.textContent = resultsData.email || "";
+  // Display lead info
+  document.getElementById("leadName").textContent = firstname + " " + lastname;
+  document.getElementById("leadEmail").textContent = email;
+  document.getElementById("leadAddress").textContent = address;
+  document.getElementById("riskScore").textContent = riskScore;
 
   // ------------------------------
-  // Load Google Maps async safely
+  // Calculator logic for summary
+  // ------------------------------
+  const equipmentPrices = {
+    under1000:{basic:300, standard:500, premium:800},
+    "1000_1999":{basic:500, standard:900, premium:1500},
+    "2000_2999":{basic:800, standard:1500, premium:2500},
+    "3000_3999":{basic:1200, standard:2200, premium:3500},
+    "4000plus":{basic:2000, standard:3500, premium:5000}
+  };
+  const installMultipliers = { diy:1, pro:1.25 };
+  const monitoringPrices = { basic:25, standard:50, premium:75 };
+  const deviceList = {
+    basic:["2–3 Security Cameras","1 Video Doorbell","2–3 Entry Sensors","Smart Lock (1)","Basic Alarm Panel"],
+    standard:["4–6 Security Cameras","Video Doorbell","4–6 Entry Sensors","Smart Lock(s)","Smart Thermostat","Smart Lighting (3–5 zones)","Smart Alarm System"],
+    premium:["6+ Security Cameras","Video Doorbell + Chimes","Full Entry Sensor Coverage","Whole-Home Smart Locks","Smart Thermostats","Full Lighting Automation","Advanced Alarm System","Voice Assistant Integration","Custom Automation Scenes"]
+  };
+
+  const total = equipmentPrices[homeSize][complexity] * installMultipliers[installType];
+  const monitor = monitoringPrices[complexity];
+
+  document.getElementById("summaryTotal").textContent = "$"+Math.round(total).toLocaleString();
+  document.getElementById("summaryMonitoring").textContent = "$"+monitor+"/mo";
+
+  const bulletsEl = document.getElementById("summaryBullets");
+  bulletsEl.innerHTML = "";
+  deviceList[complexity].forEach(d=>{
+    const li = document.createElement("li");
+    li.textContent = d;
+    bulletsEl.appendChild(li);
+  });
+
+  // ------------------------------
+  // Async-safe Google Maps
   // ------------------------------
   function loadGoogleMaps() {
     if (window.google && window.google.maps) {
       initMap();
       return;
     }
-
     const script = document.createElement("script");
     script.src = "https://maps.googleapis.com/maps/api/js?key={{GOOGLE_MAPS_KEY}}&libraries=visualization,marker&callback=initMap";
     script.async = true;
@@ -35,13 +105,9 @@ document.addEventListener("DOMContentLoaded", function () {
     document.head.appendChild(script);
   }
 
-  // ------------------------------
-  // Initialize Map with marker
-  // ------------------------------
   window.initMap = function () {
     const geocoder = new google.maps.Geocoder();
-
-    geocoder.geocode({ address: address }, function (results, status) {
+    geocoder.geocode({ address: address }, function(results, status) {
       if (status !== "OK" || !results[0]) {
         console.error("Geocode failed:", status);
         return;
@@ -52,7 +118,7 @@ document.addEventListener("DOMContentLoaded", function () {
       const map = new google.maps.Map(document.getElementById("map"), {
         zoom: 13,
         center: loc,
-        mapId: "DEMO_MAP_ID" // replace with your actual map ID
+        mapId: "DEMO_MAP_ID" // replace with your real Map ID
       });
 
       new google.maps.marker.AdvancedMarkerElement({
@@ -63,5 +129,9 @@ document.addEventListener("DOMContentLoaded", function () {
   };
 
   loadGoogleMaps();
+
 });
 </script>
+
+</body>
+</html>
