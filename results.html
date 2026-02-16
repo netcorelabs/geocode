@@ -91,6 +91,86 @@ h1,h2 {
 <script>
 document.addEventListener("DOMContentLoaded", function(){
 
+  const leadData = JSON.parse(sessionStorage.getItem("lead_data") || "{}");
+  const homeValue = localStorage.getItem("calc_home_value") || "--";
+  const securityLevel = localStorage.getItem("calc_security_level") || "standard";
+  const address = leadData.address || "1600 Amphitheatre Parkway, Mountain View, CA";
+
+  let score = 85;
+  if(homeValue && securityLevel){
+    const valueFactor = Math.min(homeValue / 500000 * 100, 100);
+    const levelFactor = securityLevel === "premium" ? -15 : securityLevel === "basic" ? 10 : 0;
+    score = Math.round(85 - valueFactor*0.1 + levelFactor);
+  }
+  document.getElementById("riskScore").textContent = score;
+
+  // 🔐 Load Google Maps (restricted by domain in Google Console)
+  function loadGoogleMaps() {
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_RESTRICTED_GOOGLE_KEY&libraries=visualization";
+    s.async = true;
+    s.onload = initMap;
+    document.head.appendChild(s);
+  }
+
+  function initMap() {
+    const geocoder = new google.maps.Geocoder();
+    geocoder.geocode({address: address}, function(results, status){
+      if(status !== "OK" || !results[0]) return;
+
+      const loc = results[0].geometry.location;
+
+      const map = new google.maps.Map(document.getElementById("map"), {
+        zoom: 13,
+        center: loc
+      });
+
+      new google.maps.Marker({
+        position: loc,
+        map: map
+      });
+
+      fetchCrimeData(map, loc);
+    });
+  }
+
+  async function fetchCrimeData(map, loc){
+    try {
+      const res = await fetch("/.netlify/functions/get-crime-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          state: "GA",
+          year: "2022"
+        })
+      });
+
+      const data = await res.json();
+      if(!data.results) return;
+
+      const heatPoints = [];
+      data.results.forEach(r => {
+        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
+        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
+        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
+      });
+
+      const heatmap = new google.maps.visualization.HeatmapLayer({
+        data: heatPoints,
+        radius: 35
+      });
+
+      heatmap.setMap(map);
+
+    } catch(e){
+      console.error("Crime API error", e);
+    }
+  }
+
+  loadGoogleMaps();
+});
+</script>
+
   // ===== Load calculator data =====
   const calcData = JSON.parse(sessionStorage.getItem("calc_data")||"{}");
 
@@ -100,8 +180,6 @@ document.addEventListener("DOMContentLoaded", function(){
 
   // ===== Load Google Map =====
   const address = calcData.address || "1600 Amphitheatre Parkway, Mountain View, CA"; // fallback
-  const GOOGLE_KEY = "YOUR_GOOGLE_KEY"; // replace with Netlify environment key if needed
-
   function loadGoogleMaps(){
     const s = document.createElement("script");
     s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_KEY}&libraries=visualization,places&callback=initMap`;
