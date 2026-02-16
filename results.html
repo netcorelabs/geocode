@@ -1,23 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Home Security Quote Results</title>
+
+<style>
+:root {
+  --primary:#0b1c2d;
+  --accent:#2563eb;
+  --bg:#f7f9fb;
+  --text:#1f2937;
+  --radius:10px;
+}
+
+body {
+  margin:0;
+  font-family:"Segoe UI", sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+
+.results-container {
+  max-width:1200px;
+  margin:auto;
+  padding:40px;
+}
+
+h1 { color:var(--primary); }
+
+.cards {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  gap:20px;
+}
+
+.card {
+  background:#fff;
+  border-radius:var(--radius);
+  padding:20px;
+  box-shadow:0 8px 20px rgba(0,0,0,0.08);
+}
+
+#map {
+  width:100%;
+  height:450px;
+  border-radius:var(--radius);
+  background:#eee;
+}
+
+.total-value {
+  font-size:24px;
+  font-weight:600;
+  margin-bottom:6px;
+}
+
+.device-list {
+  font-size:14px;
+  color:#555;
+}
+</style>
+</head>
+
+<body>
+
+<div class="results-container">
+  <h1>Your Smart Home Security Quote</h1>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Totals</h3>
+      <div class="total-value" id="upfront">$0 Upfront</div>
+      <div class="total-value" id="monthly">$0 / month</div>
+      <div class="device-list" id="device-summary">No devices selected</div>
+    </div>
+
+    <div class="card">
+      <h3>Property Map</h3>
+      <div id="map">Loading map...</div>
+    </div>
+  </div>
+</div>
+
 <script>
-document.addEventListener("DOMContentLoaded", function () {
+(function(){
 
-  const calcData = JSON.parse(sessionStorage.getItem("calc_data") || "{}");
+  // ===== SAFE DATA LOADING =====
+  let calcData = {};
+  try {
+    calcData = JSON.parse(sessionStorage.getItem("calc_data")) || {};
+  } catch(e) {
+    calcData = {};
+  }
 
-  document.getElementById("upfront").textContent =
-    "$" + Math.round(calcData.upfront || 0) + " Upfront";
+  const upfrontEl = document.getElementById("upfront");
+  const monthlyEl = document.getElementById("monthly");
+  const summaryEl = document.getElementById("device-summary");
 
-  document.getElementById("monthly").textContent =
-    "$" + (calcData.monthly || 0) + "/month";
+  if (upfrontEl) {
+    upfrontEl.textContent =
+      "$" + Math.round(calcData.upfront || 0) + " Upfront";
+  }
 
-  document.getElementById("device-summary").textContent =
-    calcData.summary && calcData.summary.length
-      ? calcData.summary.join(", ")
-      : "No devices selected";
+  if (monthlyEl) {
+    monthlyEl.textContent =
+      "$" + (calcData.monthly || 0) + " / month";
+  }
+
+  if (summaryEl) {
+    summaryEl.textContent =
+      Array.isArray(calcData.summary) && calcData.summary.length
+        ? calcData.summary.join(", ")
+        : "No devices selected";
+  }
 
   const address =
     calcData.address ||
     "1600 Amphitheatre Parkway, Mountain View, CA";
 
+  // ===== LOAD GOOGLE MAPS SAFELY =====
   function loadGoogleMaps() {
     const script = document.createElement("script");
     script.src =
@@ -28,12 +129,19 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   window.initMap = function () {
+    if (!window.google || !google.maps) {
+      document.getElementById("map").textContent =
+        "Map failed to load.";
+      return;
+    }
+
     const geocoder = new google.maps.Geocoder();
 
     geocoder.geocode({ address: address }, function (results, status) {
+
       if (status !== "OK" || !results[0]) {
         document.getElementById("map").textContent =
-          "Unable to load map for this address";
+          "Unable to load map for this address.";
         return;
       }
 
@@ -43,18 +151,36 @@ document.addEventListener("DOMContentLoaded", function () {
         document.getElementById("map"),
         {
           zoom: 14,
-          center: loc,
+          center: loc
         }
       );
 
       new google.maps.Marker({
         position: loc,
-        map: map,
+        map: map
       });
+
+      // Simple demo heatmap
+      const heatPoints = [];
+      for (let i = 0; i < 30; i++) {
+        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.02;
+        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.02;
+        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
+      }
+
+      const heatmap = new google.maps.visualization.HeatmapLayer({
+        data: heatPoints,
+        radius: 30
+      });
+
+      heatmap.setMap(map);
     });
   };
 
   loadGoogleMaps();
 
-});
+})();
 </script>
+
+</body>
+</html>
