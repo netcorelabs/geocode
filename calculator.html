@@ -1,24 +1,27 @@
 <script>
 document.addEventListener("DOMContentLoaded", function () {
 
-  const stored = sessionStorage.getItem("lead_data");
-  if (!stored) return;
+  const params = new URLSearchParams(window.location.search);
 
-  const lead = JSON.parse(stored);
-
-  // If you REMOVED visible contact fields, skip this section
-  // If you still have display-only fields, use this:
-
-  const mapField = (id, value) => {
-    const el = document.getElementById(id);
-    if (el) el.value = value || "";
+  const lead = {
+    firstname: params.get("firstname") || "",
+    lastname:  params.get("lastname") || "",
+    email:     params.get("email") || "",
+    phone:     params.get("phone") || "",
+    address:   params.get("address") || ""
   };
 
-  mapField("firstname", lead.firstname);
-  mapField("lastname", lead.lastname);
-  mapField("email", lead.email);
-  mapField("phone", lead.phone);
-  mapField("address", lead.address);
+  // Fill disabled input fields (if you have them)
+  const fill = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  };
+
+  fill("firstname", lead.firstname);
+  fill("lastname", lead.lastname);
+  fill("email", lead.email);
+  fill("phone", lead.phone);
+  fill("address", lead.address);
 
 });
 </script>
