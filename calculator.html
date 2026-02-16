@@ -3,152 +3,153 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Smart Home Calculator</title>
+<title>Smart Home Security Calculator</title>
+
 <style>
-body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; }
-.container { max-width:1200px; margin:0 auto; padding:40px; }
-.calc-card { background:#fff; padding:30px; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,0.1); }
-.calc-card h2 { margin-top:0; }
-.calc-step { margin-bottom:20px; }
-select,input[type=radio] { width:100%; padding:10px; margin-top:5px; }
-.summary-card { background:#fff; padding:20px; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.05); margin-top:20px; }
-button { padding:12px 20px; border:none; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-size:16px; margin-top:20px; }
-button:hover { background:#1e40af; }
+body {
+  font-family: "Segoe UI", sans-serif;
+  background: linear-gradient(135deg,#f8fafc,#e0f2fe);
+  margin: 0;
+  padding: 40px;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.card {
+  background: white;
+  padding: 30px;
+  border-radius: 20px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.08);
+  margin-bottom: 30px;
+}
+
+h2 {
+  margin-top: 0;
+}
+
+.lead-info p {
+  margin: 8px 0;
+  font-size: 15px;
+}
+
+.estimate-card {
+  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
+  color: white;
+  text-align: center;
+}
+
+.estimate-card h2 {
+  font-size: 50px;
+  margin: 10px 0;
+}
+
+.total-price {
+  font-size: 26px;
+  font-weight: bold;
+}
+
+button {
+  width: 100%;
+  padding: 16px;
+  border-radius: 14px;
+  border: none;
+  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+button:hover {
+  opacity: .9;
+}
 </style>
 </head>
+
 <body>
 
 <div class="container">
-  <div class="calc-card">
-    <h2>Build Your Estimate</h2>
 
-    <div class="calc-step">
-      <label>Home Size</label>
-      <select id="homeSize">
-        <option value="under1000">&lt; 1,000 sq ft</option>
-        <option value="1000_1999">1,000–1,999 sq ft</option>
-        <option value="2000_2999">2,000–2,999 sq ft</option>
-        <option value="3000_3999">3,000–3,999 sq ft</option>
-        <option value="4000plus">4,000+ sq ft</option>
-      </select>
-    </div>
-
-    <div class="calc-step">
-      <label>Project Level</label>
-      <label><input type="radio" name="complexity" value="basic" checked> Starter</label>
-      <label><input type="radio" name="complexity" value="standard"> Standard</label>
-      <label><input type="radio" name="complexity" value="premium"> Premium</label>
-    </div>
-
-    <div class="calc-step">
-      <label>Installation</label>
-      <select id="installType">
-        <option value="diy">DIY Install</option>
-        <option value="pro">Professional Install</option>
-      </select>
-    </div>
-
-    <div class="summary-card">
-      <h3>Your Estimate</h3>
-      <p>Equipment + Install: <span id="summaryTotal">$0</span></p>
-      <p>Monitoring: <span id="summaryMonitoring">$0/mo</span></p>
-      <p>Included Devices:</p>
-      <ul id="summaryBullets"></ul>
-      <p>Estimated Risk Score: <span id="riskScoreDisplay">--</span></p>
-    </div>
-
-    <button id="btnResults">Get Your Full Breakdown & Recommendations</button>
+  <!-- Lead Info Card -->
+  <div class="card lead-info">
+    <h2>Your Information</h2>
+    <p><strong>Name:</strong> <span id="leadName">--</span></p>
+    <p><strong>Email:</strong> <span id="leadEmail">--</span></p>
+    <p><strong>Phone:</strong> <span id="leadPhone">--</span></p>
+    <p><strong>Address:</strong> <span id="leadAddress">--</span></p>
   </div>
+
+  <!-- Estimate Card -->
+  <div class="card estimate-card">
+    <p>Security Readiness Score</p>
+    <h2 id="riskScore">85</h2>
+
+    <div class="total-price">
+      Equipment + Install: $<span id="equipmentTotal">1200</span>
+    </div>
+
+    <div style="margin-top:10px;">
+      Monitoring: $<span id="monitoringTotal">49</span>/mo
+    </div>
+  </div>
+
+  <!-- Continue Button -->
+  <div class="card">
+    <button id="viewResults">View Full Results</button>
+  </div>
+
 </div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function(){
-  const homeSizeEl = document.getElementById("homeSize");
-  const installTypeEl = document.getElementById("installType");
-  const complexityEls = document.querySelectorAll('input[name="complexity"]');
 
-  const summaryTotalEl = document.getElementById("summaryTotal");
-  const summaryMonitoringEl = document.getElementById("summaryMonitoring");
-  const summaryBulletsEl = document.getElementById("summaryBullets");
-  const riskScoreDisplayEl = document.getElementById("riskScoreDisplay");
+  // Get lead data from landing page
+  const leadData = JSON.parse(sessionStorage.getItem("lead_data") || "{}");
 
-  const equipmentPrices = {
-    under1000:{basic:300, standard:500, premium:800},
-    "1000_1999":{basic:500, standard:900, premium:1500},
-    "2000_2999":{basic:800, standard:1500, premium:2500},
-    "3000_3999":{basic:1200, standard:2200, premium:3500},
-    "4000plus":{basic:2000, standard:3500, premium:5000}
+  // Populate lead info
+  document.getElementById("leadName").textContent =
+    (leadData.firstname || "") + " " + (leadData.lastname || "");
+
+  document.getElementById("leadEmail").textContent =
+    leadData.email || "--";
+
+  document.getElementById("leadPhone").textContent =
+    leadData.phone || "--";
+
+  document.getElementById("leadAddress").textContent =
+    leadData.address || "--";
+
+
+  // ----- Example Calculator Logic -----
+  // Replace this with your actual scoring logic
+
+  let riskScore = 85;
+  let equipmentTotal = 1200;
+  let monitoringTotal = 49;
+
+  // Store results for results page
+  const calcResults = {
+    riskScore,
+    equipmentTotal,
+    monitoringTotal
   };
-  const installMultipliers = { diy:1, pro:1.25 };
-  const monitoringPrices = { basic:25, standard:50, premium:75 };
-  const deviceList = {
-    basic:["2–3 Security Cameras","1 Video Doorbell","2–3 Entry Sensors","Smart Lock (1)","Basic Alarm Panel"],
-    standard:["4–6 Security Cameras","Video Doorbell","4–6 Entry Sensors","Smart Lock(s)","Smart Thermostat","Smart Lighting (3–5 zones)","Smart Alarm System"],
-    premium:["6+ Security Cameras","Video Doorbell + Chimes","Full Entry Sensor Coverage","Whole-Home Smart Locks","Smart Thermostats","Full Lighting Automation","Advanced Alarm System","Voice Assistant Integration","Custom Automation Scenes"]
-  };
 
-  function getComplexity(){ return Array.from(complexityEls).find(r=>r.checked).value; }
+  sessionStorage.setItem("calc_results", JSON.stringify(calcResults));
 
-  function calculateRiskScore(){
-    const homeSize = homeSizeEl.value;
-    const complexity = getComplexity();
-    const installType = installTypeEl.value;
+  document.getElementById("riskScore").textContent = riskScore;
+  document.getElementById("equipmentTotal").textContent = equipmentTotal;
+  document.getElementById("monitoringTotal").textContent = monitoringTotal;
 
-    let score = 50;
-    if(homeSize=="under1000") score += 5;
-    else if(homeSize=="1000_1999") score +=10;
-    else if(homeSize=="2000_2999") score +=20;
-    else if(homeSize=="3000_3999") score +=30;
-    else score +=40;
-
-    if(complexity=="standard") score +=10;
-    else if(complexity=="premium") score +=20;
-
-    if(installType=="pro") score -=5;
-    if(score>100) score=100;
-    if(score<0) score=0;
-    return Math.round(score);
-  }
-
-  function updateEstimate(){
-    const homeSize = homeSizeEl.value;
-    const complexity = getComplexity();
-    const installType = installTypeEl.value;
-
-    const base = equipmentPrices[homeSize][complexity];
-    const total = base * installMultipliers[installType];
-    const monitor = monitoringPrices[complexity];
-
-    summaryTotalEl.textContent = "$"+Math.round(total).toLocaleString();
-    summaryMonitoringEl.textContent = "$"+monitor+"/mo";
-
-    summaryBulletsEl.innerHTML="";
-    deviceList[complexity].forEach(d=>{
-      const li=document.createElement("li");
-      li.textContent=d;
-      summaryBulletsEl.appendChild(li);
-    });
-
-    riskScoreDisplayEl.textContent = calculateRiskScore();
-  }
-
-  [homeSizeEl, installTypeEl, ...complexityEls].forEach(el=>el.addEventListener("change", updateEstimate));
-  updateEstimate();
-
-  document.getElementById("btnResults").addEventListener("click", function(){
-    const riskScore = calculateRiskScore();
-    // Save calculator data only, results page can combine with lead info from sessionStorage
-    sessionStorage.setItem("calc_results", JSON.stringify({
-      homeSize: homeSizeEl.value,
-      complexity: getComplexity(),
-      installType: installTypeEl.value,
-      riskScore: riskScore
-    }));
-    // Redirect to results page
-    window.location.href = "/results.html";
+  // Redirect to results page
+  document.getElementById("viewResults").addEventListener("click", function(){
+    window.location.href = "results.html";
   });
 
 });
 </script>
+
 </body>
 </html>
