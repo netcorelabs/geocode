@@ -5,49 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Smart Home Calculator</title>
 <style>
-  body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 40px; }
-  .calc-form { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-  .calc-form h2 { margin-top:0; text-align:center; }
-  .calc-step { margin-bottom:20px; }
-  select,input[type=radio],input[readonly] { width:100%; padding:10px; margin-top:5px; font-size:16px; }
-  input[readonly] { background:#f1f5f9; border:1px solid #cbd5e1; }
-  .summary-card { background:#fff; padding:20px; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.05); margin-top:30px; }
-  .summary-card h3 { margin-top:0; }
-  ul { margin:5px 0 0 20px; }
-  button { padding:12px 20px; border:none; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-size:16px; margin-top:20px; width:100%; }
-  button:hover { background:#1e40af; }
+body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; }
+.container { max-width:1200px; margin:0 auto; padding:40px; }
+.calc-card { background:#fff; padding:30px; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,0.1); }
+.calc-card h2 { margin-top:0; }
+.calc-step { margin-bottom:20px; }
+select,input[type=radio] { width:100%; padding:10px; margin-top:5px; }
+.summary-card { background:#fff; padding:20px; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.05); margin-top:20px; }
+button { padding:12px 20px; border:none; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-size:16px; margin-top:20px; }
+button:hover { background:#1e40af; }
 </style>
 </head>
 <body>
 
 <div class="container">
-  <div class="calc-form">
-    <h2>Smart Home Security Calculator</h2>
+  <div class="calc-card">
+    <h2>Build Your Estimate</h2>
 
-    <!-- Lead Info Display (Readonly) -->
-    <div class="calc-step">
-      <label>First Name</label>
-      <input type="text" id="calc-firstname" readonly />
-    </div>
-    <div class="calc-step">
-      <label>Last Name</label>
-      <input type="text" id="calc-lastname" readonly />
-    </div>
-    <div class="calc-step">
-      <label>Email</label>
-      <input type="email" id="calc-email" readonly />
-    </div>
-    <div class="calc-step">
-      <label>Phone</label>
-      <input type="tel" id="calc-phone" readonly />
-    </div>
-    <div class="calc-step">
-      <label>Address</label>
-      <input type="text" id="calc-address" readonly />
-    </div>
-
-    <!-- Calculator Inputs -->
     <div class="calc-step">
       <label>Home Size</label>
       <select id="homeSize">
@@ -74,7 +48,6 @@
       </select>
     </div>
 
-    <!-- Estimate Summary Card -->
     <div class="summary-card">
       <h3>Your Estimate</h3>
       <p>Equipment + Install: <span id="summaryTotal">$0</span></p>
@@ -84,27 +57,12 @@
       <p>Estimated Risk Score: <span id="riskScoreDisplay">--</span></p>
     </div>
 
-    <button id="btnResults">View Full Recommendations</button>
+    <button id="btnResults">Get Your Full Breakdown & Recommendations</button>
   </div>
 </div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function(){
-
-  // ------------------------------
-  // Load lead data from sessionStorage (HubSpot form submission)
-  // ------------------------------
-  const leadData = JSON.parse(sessionStorage.getItem("lead_data") || "{}");
-
-  const readonlyFields = ["firstname","lastname","email","phone","address"];
-  readonlyFields.forEach(f => {
-    const el = document.getElementById("calc-" + f);
-    if(el) el.value = leadData[f] || "";
-  });
-
-  // ------------------------------
-  // Calculator Setup
-  // ------------------------------
   const homeSizeEl = document.getElementById("homeSize");
   const installTypeEl = document.getElementById("installType");
   const complexityEls = document.querySelectorAll('input[name="complexity"]');
@@ -132,12 +90,12 @@ document.addEventListener("DOMContentLoaded", function(){
   function getComplexity(){ return Array.from(complexityEls).find(r=>r.checked).value; }
 
   function calculateRiskScore(){
-    let score = 50;
     const homeSize = homeSizeEl.value;
     const complexity = getComplexity();
     const installType = installTypeEl.value;
 
-    if(homeSize=="under1000") score +=5;
+    let score = 50;
+    if(homeSize=="under1000") score += 5;
     else if(homeSize=="1000_1999") score +=10;
     else if(homeSize=="2000_2999") score +=20;
     else if(homeSize=="3000_3999") score +=30;
@@ -147,8 +105,9 @@ document.addEventListener("DOMContentLoaded", function(){
     else if(complexity=="premium") score +=20;
 
     if(installType=="pro") score -=5;
-
-    return Math.min(100, Math.max(0, Math.round(score)));
+    if(score>100) score=100;
+    if(score<0) score=0;
+    return Math.round(score);
   }
 
   function updateEstimate(){
@@ -156,16 +115,17 @@ document.addEventListener("DOMContentLoaded", function(){
     const complexity = getComplexity();
     const installType = installTypeEl.value;
 
-    const total = equipmentPrices[homeSize][complexity] * installMultipliers[installType];
+    const base = equipmentPrices[homeSize][complexity];
+    const total = base * installMultipliers[installType];
     const monitor = monitoringPrices[complexity];
 
     summaryTotalEl.textContent = "$"+Math.round(total).toLocaleString();
     summaryMonitoringEl.textContent = "$"+monitor+"/mo";
 
-    summaryBulletsEl.innerHTML = "";
+    summaryBulletsEl.innerHTML="";
     deviceList[complexity].forEach(d=>{
-      const li = document.createElement("li");
-      li.textContent = d;
+      const li=document.createElement("li");
+      li.textContent=d;
       summaryBulletsEl.appendChild(li);
     });
 
@@ -175,26 +135,20 @@ document.addEventListener("DOMContentLoaded", function(){
   [homeSizeEl, installTypeEl, ...complexityEls].forEach(el=>el.addEventListener("change", updateEstimate));
   updateEstimate();
 
-  // ------------------------------
-  // Redirect to results page
-  // ------------------------------
   document.getElementById("btnResults").addEventListener("click", function(){
-    const resultsData = {
-      ...leadData,
+    const riskScore = calculateRiskScore();
+    // Save calculator data only, results page can combine with lead info from sessionStorage
+    sessionStorage.setItem("calc_results", JSON.stringify({
       homeSize: homeSizeEl.value,
       complexity: getComplexity(),
       installType: installTypeEl.value,
-      riskScore: calculateRiskScore(),
-      equipment: Math.round(equipmentPrices[homeSizeEl.value][getComplexity()] * installMultipliers[installTypeEl.value]),
-      monitoring: monitoringPrices[getComplexity()],
-      devices: deviceList[getComplexity()]
-    };
-    sessionStorage.setItem("calc_results", JSON.stringify(resultsData));
+      riskScore: riskScore
+    }));
+    // Redirect to results page
     window.location.href = "/results.html";
   });
 
 });
 </script>
-
 </body>
 </html>
