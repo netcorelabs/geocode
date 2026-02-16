@@ -1,78 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Home Security Results</title>
+<style>
+.hsc-results {
+  padding: 60px;
+  background: linear-gradient(135deg,#ffffff,#e0f2fe);
+  font-family: "Segoe UI", sans-serif;
+}
+.result-grid {
+  display: grid;
+  gap: 40px;
+}
+.score-card {
+  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
+  color: white;
+  padding: 40px;
+  border-radius: 20px;
+  text-align: center;
+}
+#riskScore { font-size: 70px; }
+.map-card { width: 100%; border-radius: 20px; overflow: hidden; }
+</style>
+</head>
+<body>
+
 <section class="hsc-results">
-
   <div class="result-grid">
-
     <div class="score-card">
       <h2 id="riskScore">--</h2>
       <p>Security Readiness Score</p>
     </div>
-
     <div class="map-card">
-      <div id="map" style="width:100%;height:450px;border-radius:20px;"></div>
+      <div id="map" style="width:100%;height:450px;"></div>
     </div>
-
   </div>
-
 </section>
-
-<style>
-.hsc-results {
-  padding:60px;
-  background:linear-gradient(135deg,#ffffff,#e0f2fe);
-  font-family:"Segoe UI", sans-serif;
-}
-.result-grid {
-  display:grid;
-  gap:40px;
-  grid-template-columns: 1fr 2fr;
-}
-.score-card {
-  background:linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color:white;
-  padding:40px;
-  border-radius:20px;
-  text-align:center;
-}
-#riskScore { font-size:70px; }
-</style>
 
 <script>
 document.addEventListener("DOMContentLoaded", function(){
 
-  // ------------------------------
-  // Pull lead + calculator data
-  // ------------------------------
+  // --- Load data from sessionStorage / localStorage ---
   const leadData = JSON.parse(sessionStorage.getItem("lead_data") || "{}");
-  const calcData = JSON.parse(sessionStorage.getItem("calc_results") || "{}");
+  const homeValue = localStorage.getItem("calc_home_value") || "--";
+  const securityLevel = localStorage.getItem("calc_security_level") || "standard";
+  const address = leadData.address || "1600 Amphitheatre Parkway, Mountain View, CA"; // fallback
 
-  const address = leadData.address || calcData.address || "Atlanta, GA";
-  const riskScore = calcData.riskScore || 85;
+  // --- Compute a simple risk score based on home value & security ---
+  let score = 85; // default
+  if(homeValue && securityLevel){
+    const valueFactor = Math.min(homeValue / 500000 * 100, 100);
+    const levelFactor = securityLevel === "premium" ? -15 : securityLevel === "basic" ? 10 : 0;
+    score = Math.round(85 - valueFactor*0.1 + levelFactor);
+  }
+  document.getElementById("riskScore").textContent = score;
 
-  document.getElementById("riskScore").textContent = riskScore;
+  // --- Load Google Maps ---
+  const GOOGLE_KEY = window.netlifyGoogleMapsKey || "YOUR_GOOGLE_KEY"; // replace or use Netlify env
+  const FBI_KEY = window.netlifyFbiKey || "YOUR_FBI_KEY";
 
-  // ------------------------------
-  // Load Google Maps async
-  // ------------------------------
-  function loadGoogle(){
-    if(window.google && window.google.maps) {
-      initMap();
-      return;
-    }
+  function loadGoogleMaps() {
     const s = document.createElement("script");
-    s.src = "https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_KEY&libraries=visualization";
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_KEY}&libraries=visualization`;
     s.async = true;
-    s.defer = true;
     s.onload = initMap;
     document.head.appendChild(s);
   }
 
-  function initMap(){
+  function initMap() {
     const geocoder = new google.maps.Geocoder();
     geocoder.geocode({address: address}, function(results, status){
-      if(status !== "OK" || !results[0]){
-        console.error("Geocode failed", status);
-        return;
-      }
+      if(status !== "OK" || !results[0]) return;
 
       const loc = results[0].geometry.location;
 
@@ -90,18 +90,14 @@ document.addEventListener("DOMContentLoaded", function(){
     });
   }
 
-  // ------------------------------
-  // Fetch FBI Crime data for heatmap overlay
-  // ------------------------------
   async function fetchCrimeData(map, loc){
     try {
-      const state = "GA"; // optionally auto-detect
+      const state = "GA"; // optionally from lead address
       const year = "2022";
 
       const res = await fetch(
-        `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=YOUR_FBI_KEY`
+        `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=${FBI_KEY}`
       );
-
       const data = await res.json();
       if(!data.results) return;
 
@@ -116,15 +112,15 @@ document.addEventListener("DOMContentLoaded", function(){
         data: heatPoints,
         radius: 35
       });
-
       heatmap.setMap(map);
-
     } catch(e){
       console.error("FBI API error", e);
     }
   }
 
-  loadGoogle();
-
+  loadGoogleMaps();
 });
 </script>
+
+</body>
+</html>
