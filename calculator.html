@@ -1,155 +1,24 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Smart Home Security Calculator</title>
-
-<style>
-body {
-  font-family: "Segoe UI", sans-serif;
-  background: linear-gradient(135deg,#f8fafc,#e0f2fe);
-  margin: 0;
-  padding: 40px;
-}
-
-.container {
-  max-width: 900px;
-  margin: 0 auto;
-}
-
-.card {
-  background: white;
-  padding: 30px;
-  border-radius: 20px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.08);
-  margin-bottom: 30px;
-}
-
-h2 {
-  margin-top: 0;
-}
-
-.lead-info p {
-  margin: 8px 0;
-  font-size: 15px;
-}
-
-.estimate-card {
-  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color: white;
-  text-align: center;
-}
-
-.estimate-card h2 {
-  font-size: 50px;
-  margin: 10px 0;
-}
-
-.total-price {
-  font-size: 26px;
-  font-weight: bold;
-}
-
-button {
-  width: 100%;
-  padding: 16px;
-  border-radius: 14px;
-  border: none;
-  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-  font-size: 16px;
-}
-
-button:hover {
-  opacity: .9;
-}
-</style>
-</head>
-
-<body>
-
-<div class="container">
-
-  <!-- Lead Info Card -->
-  <div class="card lead-info">
-    <h2>Your Information</h2>
-    <p><strong>Name:</strong> <span id="leadName">--</span></p>
-    <p><strong>Email:</strong> <span id="leadEmail">--</span></p>
-    <p><strong>Phone:</strong> <span id="leadPhone">--</span></p>
-    <p><strong>Address:</strong> <span id="leadAddress">--</span></p>
-  </div>
-
-  <!-- Estimate Card -->
-  <div class="card estimate-card">
-    <p>Security Readiness Score</p>
-    <h2 id="riskScore">85</h2>
-
-    <div class="total-price">
-      Equipment + Install: $<span id="equipmentTotal">1200</span>
-    </div>
-
-    <div style="margin-top:10px;">
-      Monitoring: $<span id="monitoringTotal">49</span>/mo
-    </div>
-  </div>
-
-  <!-- Continue Button -->
-  <div class="card">
-    <button id="viewResults">View Full Results</button>
-  </div>
-
-</div>
-
 <script>
-document.addEventListener("DOMContentLoaded", function(){
+document.addEventListener("DOMContentLoaded", function () {
 
-  // Get lead data from landing page
-  const leadData = JSON.parse(sessionStorage.getItem("lead_data") || "{}");
+  const stored = sessionStorage.getItem("lead_data");
+  if (!stored) return;
 
-  // Populate lead info
-  document.getElementById("leadName").textContent =
-    (leadData.firstname || "") + " " + (leadData.lastname || "");
+  const lead = JSON.parse(stored);
 
-  document.getElementById("leadEmail").textContent =
-    leadData.email || "--";
+  // If you REMOVED visible contact fields, skip this section
+  // If you still have display-only fields, use this:
 
-  document.getElementById("leadPhone").textContent =
-    leadData.phone || "--";
-
-  document.getElementById("leadAddress").textContent =
-    leadData.address || "--";
-
-
-  // ----- Example Calculator Logic -----
-  // Replace this with your actual scoring logic
-
-  let riskScore = 85;
-  let equipmentTotal = 1200;
-  let monitoringTotal = 49;
-
-  // Store results for results page
-  const calcResults = {
-    riskScore,
-    equipmentTotal,
-    monitoringTotal
+  const mapField = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value || "";
   };
 
-  sessionStorage.setItem("calc_results", JSON.stringify(calcResults));
-
-  document.getElementById("riskScore").textContent = riskScore;
-  document.getElementById("equipmentTotal").textContent = equipmentTotal;
-  document.getElementById("monitoringTotal").textContent = monitoringTotal;
-
-  // Redirect to results page
-  document.getElementById("viewResults").addEventListener("click", function(){
-    window.location.href = "results.html";
-  });
+  mapField("firstname", lead.firstname);
+  mapField("lastname", lead.lastname);
+  mapField("email", lead.email);
+  mapField("phone", lead.phone);
+  mapField("address", lead.address);
 
 });
 </script>
-
-</body>
-</html>
