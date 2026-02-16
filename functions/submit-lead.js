@@ -1,14 +1,11 @@
-// netlify/functions/submit-lead.js
-
 export async function handler(event) {
-
-  const ALLOWED_ORIGINS = [
+  const allowedOrigins = [
     "https://www.homesecurecalculator.com",
     "https://hubspotgate.netlify.app"
   ];
 
   function corsHeaders(origin) {
-    const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+    const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
     return {
       "Access-Control-Allow-Origin": allowedOrigin,
       "Access-Control-Allow-Headers": "Content-Type",
@@ -16,7 +13,7 @@ export async function handler(event) {
     };
   }
 
-  // Respond to preflight
+  // Preflight OPTIONS
   if (event.httpMethod === "OPTIONS") {
     return {
       statusCode: 200,
@@ -25,7 +22,7 @@ export async function handler(event) {
     };
   }
 
-  // Only accept POST
+  // Only allow POST
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
@@ -40,11 +37,7 @@ export async function handler(event) {
     const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID;
     const HUBSPOT_FORM_ID = process.env.HUBSPOT_FORM_ID;
 
-    if (!HUBSPOT_PORTAL_ID || !HUBSPOT_FORM_ID) {
-      throw new Error("HubSpot IDs not set in environment variables");
-    }
-
-    const hubspotPayload = {
+    const payload = {
       fields: [
         { name: "firstname", value: data.firstname },
         { name: "lastname", value: data.lastname },
@@ -65,7 +58,7 @@ export async function handler(event) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(hubspotPayload)
+        body: JSON.stringify(payload)
       }
     );
 
@@ -79,7 +72,6 @@ export async function handler(event) {
       headers: corsHeaders(event.headers.origin),
       body: JSON.stringify({ success: true })
     };
-
   } catch (err) {
     return {
       statusCode: 500,
