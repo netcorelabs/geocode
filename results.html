@@ -3,81 +3,123 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Smart Home Security Results</title>
+<title>Smart Home Security Quote Results</title>
+
 <style>
-.hsc-results {
-  padding: 60px;
-  background: linear-gradient(135deg,#ffffff,#e0f2fe);
-  font-family: "Segoe UI", sans-serif;
+:root {
+  --primary:#0b1c2d;
+  --accent:#2563eb;
+  --bg:#f7f9fb;
+  --text:#1f2937;
+  --radius:10px;
 }
-.result-grid {
-  display: grid;
-  gap: 40px;
+
+body {
+  margin:0;
+  font-family:"Segoe UI", sans-serif;
+  background:var(--bg);
+  color:var(--text);
 }
-.score-card {
-  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color: white;
-  padding: 40px;
-  border-radius: 20px;
-  text-align: center;
+
+.results-container {
+  max-width:1200px;
+  margin:auto;
+  padding:40px;
 }
-#riskScore { font-size: 70px; }
-.map-card { width: 100%; border-radius: 20px; overflow: hidden; }
+
+h1,h2 {
+  color:var(--primary);
+}
+
+.cards {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  gap:20px;
+}
+
+.card {
+  background:#fff;
+  border-radius:var(--radius);
+  padding:20px;
+  box-shadow:0 8px 20px rgba(0,0,0,0.08);
+}
+
+.card h3 {
+  margin:0 0 10px;
+  color:var(--primary);
+}
+
+#map {
+  width:100%;
+  height:450px;
+  border-radius:var(--radius);
+}
+
+.total-value {
+  font-size:28px;
+  font-weight:600;
+  margin-bottom:6px;
+}
+
+.device-list {
+  font-size:14px;
+  color:#555;
+}
 </style>
 </head>
+
 <body>
 
-<section class="hsc-results">
-  <div class="result-grid">
-    <div class="score-card">
-      <h2 id="riskScore">--</h2>
-      <p>Security Readiness Score</p>
+<div class="results-container">
+  <h1>Your Smart Home Security Quote</h1>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Totals</h3>
+      <div class="total-value" id="upfront">$0 Upfront</div>
+      <div class="total-value" id="monthly">$0 / month</div>
+      <div class="device-list" id="device-summary">No devices selected</div>
     </div>
-    <div class="map-card">
-      <div id="map" style="width:100%;height:450px;"></div>
+
+    <div class="card">
+      <h3>Property Map</h3>
+      <div id="map">Loading map...</div>
     </div>
   </div>
-</section>
+</div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function(){
 
-  // --- Load data from sessionStorage / localStorage ---
-  const leadData = JSON.parse(sessionStorage.getItem("lead_data") || "{}");
-  const homeValue = localStorage.getItem("calc_home_value") || "--";
-  const securityLevel = localStorage.getItem("calc_security_level") || "standard";
-  const address = leadData.address || "1600 Amphitheatre Parkway, Mountain View, CA"; // fallback
+  // ===== Load calculator data =====
+  const calcData = JSON.parse(sessionStorage.getItem("calc_data")||"{}");
 
-  // --- Compute a simple risk score based on home value & security ---
-  let score = 85; // default
-  if(homeValue && securityLevel){
-    const valueFactor = Math.min(homeValue / 500000 * 100, 100);
-    const levelFactor = securityLevel === "premium" ? -15 : securityLevel === "basic" ? 10 : 0;
-    score = Math.round(85 - valueFactor*0.1 + levelFactor);
-  }
-  document.getElementById("riskScore").textContent = score;
+  document.getElementById("upfront").textContent = `$${Math.round(calcData.upfront||0)} Upfront`;
+  document.getElementById("monthly").textContent = `$${calcData.monthly||0}/month`;
+  document.getElementById("device-summary").textContent = calcData.summary && calcData.summary.length ? calcData.summary.join(", ") : "No devices selected";
 
-  // --- Load Google Maps ---
-  const GOOGLE_KEY = window.netlifyGoogleMapsKey || "YOUR_GOOGLE_KEY"; // replace or use Netlify env
-  const FBI_KEY = window.netlifyFbiKey || "YOUR_FBI_KEY";
+  // ===== Load Google Map =====
+  const address = calcData.address || "1600 Amphitheatre Parkway, Mountain View, CA"; // fallback
+  const GOOGLE_KEY = "YOUR_GOOGLE_KEY"; // replace with Netlify environment key if needed
 
-  function loadGoogleMaps() {
+  function loadGoogleMaps(){
     const s = document.createElement("script");
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_KEY}&libraries=visualization`;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_KEY}&libraries=visualization,places&callback=initMap`;
     s.async = true;
-    s.onload = initMap;
     document.head.appendChild(s);
   }
 
-  function initMap() {
+  window.initMap = function(){
     const geocoder = new google.maps.Geocoder();
     geocoder.geocode({address: address}, function(results, status){
-      if(status !== "OK" || !results[0]) return;
-
+      if(status !== "OK" || !results[0]){
+        document.getElementById("map").textContent = "Unable to load map for this address";
+        return;
+      }
       const loc = results[0].geometry.location;
 
       const map = new google.maps.Map(document.getElementById("map"), {
-        zoom: 13,
+        zoom: 14,
         center: loc
       });
 
@@ -86,39 +128,35 @@ document.addEventListener("DOMContentLoaded", function(){
         map: map
       });
 
-      fetchCrimeData(map, loc);
+      loadCrimeHeatmap(map, loc);
     });
   }
 
-  async function fetchCrimeData(map, loc){
+  // ===== Sample crime heatmap (replace with your API) =====
+  async function loadCrimeHeatmap(map, loc){
     try {
-      const state = "GA"; // optionally from lead address
-      const year = "2022";
-
-      const res = await fetch(
-        `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=${FBI_KEY}`
-      );
-      const data = await res.json();
-      if(!data.results) return;
-
+      // Replace with your real FBI/Crime API or Netlify function
       const heatPoints = [];
-      data.results.forEach(r => {
-        const latOffset = loc.lat() + (Math.random() - 0.5) * 0.15;
-        const lngOffset = loc.lng() + (Math.random() - 0.5) * 0.15;
-        heatPoints.push(new google.maps.LatLng(latOffset, lngOffset));
-      });
+      for(let i=0;i<50;i++){
+        const latOffset = loc.lat() + (Math.random()-0.5)*0.02;
+        const lngOffset = loc.lng() + (Math.random()-0.5)*0.02;
+        heatPoints.push(new google.maps.LatLng(latOffset,lngOffset));
+      }
 
       const heatmap = new google.maps.visualization.HeatmapLayer({
         data: heatPoints,
-        radius: 35
+        radius: 30
       });
+
       heatmap.setMap(map);
+
     } catch(e){
-      console.error("FBI API error", e);
+      console.error("Error loading heatmap", e);
     }
   }
 
   loadGoogleMaps();
+
 });
 </script>
 
