@@ -1,4 +1,3 @@
-// submit-lead.js
 export async function handler(event) {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
@@ -14,10 +13,10 @@ export async function handler(event) {
     };
   }
 
-  // Preflight OPTIONS request
+  // Preflight request
   if (event.httpMethod === "OPTIONS") {
     return {
-      statusCode: 200,
+      statusCode: 204,
       headers: corsHeaders(event.headers.origin),
       body: ""
     };
@@ -38,7 +37,7 @@ export async function handler(event) {
     const HUBSPOT_FORM_ID = process.env.HUBSPOT_FORM_ID;
 
     if (!HUBSPOT_PORTAL_ID || !HUBSPOT_FORM_ID) {
-      throw new Error("HubSpot IDs not set in environment variables");
+      throw new Error("HubSpot IDs not set");
     }
 
     const hubspotPayload = {
