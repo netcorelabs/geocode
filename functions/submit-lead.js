@@ -7,7 +7,6 @@ export async function handler(event) {
     "https://hubspotgate.netlify.app"
   ];
 
-  // Helper function to set CORS headers
   function corsHeaders(origin) {
     const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
     return {
@@ -17,9 +16,7 @@ export async function handler(event) {
     };
   }
 
-  // ------------------------------
   // Handle preflight OPTIONS request
-  // ------------------------------
   if (event.httpMethod === "OPTIONS") {
     return {
       statusCode: 204,
@@ -38,10 +35,8 @@ export async function handler(event) {
   }
 
   try {
-    // Parse request body
     const data = JSON.parse(event.body);
 
-    // Get HubSpot IDs from environment
     const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID;
     const HUBSPOT_FORM_ID = process.env.HUBSPOT_FORM_ID;
 
@@ -49,7 +44,6 @@ export async function handler(event) {
       throw new Error("HubSpot IDs not set in environment variables");
     }
 
-    // Build HubSpot payload
     const hubspotPayload = {
       fields: [
         { name: "firstname", value: data.firstname },
@@ -66,7 +60,6 @@ export async function handler(event) {
       context: { pageUri: data.pageUri || "" }
     };
 
-    // Submit to HubSpot
     const res = await fetch(
       `https://api.hsforms.com/submissions/v3/integration/submit/${HUBSPOT_PORTAL_ID}/${HUBSPOT_FORM_ID}`,
       {
@@ -78,14 +71,9 @@ export async function handler(event) {
 
     if (!res.ok) {
       const text = await res.text();
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers.origin),
-        body: text
-      };
+      return { statusCode: 400, headers: corsHeaders(event.headers.origin), body: text };
     }
 
-    // Success
     return {
       statusCode: 200,
       headers: corsHeaders(event.headers.origin),
