@@ -1,62 +1,35 @@
-export async function handler(event) {
+exports.handler = async function (event) {
   try {
-    const { lat, lng } = event.queryStringParameters || {};
-    if (!lat || !lng) {
-      return response(400, { error: "Missing lat/lng" });
+    const { state, year } = JSON.parse(event.body || "{}");
+
+    const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+
+    if (!RAPIDAPI_KEY) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "Missing RAPIDAPI_KEY" })
+      };
     }
 
-    const res = await fetch(
-      `https://crime-data.p.rapidapi.com/crime?lat=${lat}&lng=${lng}&radius=1`,
-      {
-        headers: {
-          "X-RapidAPI-Key": process.env.RAPIDAPI_KEY,
-          "X-RapidAPI-Host": "crime-data.p.rapidapi.com"
-        }
-      }
+    const response = await fetch(
+      `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/${state}/violent-crime/${year}/${year}?api_key=${RAPIDAPI_KEY}`
     );
 
-    const data = await res.json();
-    const crimes = data?.results || [];
+    const data = await response.json();
 
-    const weightedScore = calculateCrimeWeight(crimes);
+    return {
+      statusCode: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type"
+      },
+      body: JSON.stringify(data)
+    };
 
-    return response(200, {
-      totalCrimes: crimes.length,
-      weightedCrimeScore: weightedScore,
-      crimes
-    });
-
-  } catch (err) {
-    return response(500, { error: err.message });
+  } catch (error) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
   }
-}
-
-function calculateCrimeWeight(crimes) {
-  const weights = {
-    homicide: 10,
-    assault: 7,
-    robbery: 6,
-    burglary: 5,
-    "vehicle theft": 4,
-    theft: 3
-  };
-
-  return crimes.reduce((score, crime) => {
-    const type = (crime.offense || "").toLowerCase();
-    for (let key in weights) {
-      if (type.includes(key)) return score + weights[key];
-    }
-    return score + 2;
-  }, 0);
-}
-
-function response(code, body) {
-  return {
-    statusCode: code,
-    headers: {
-      "Access-Control-Allow-Origin": "https://www.homesecurecalculator.com",
-      "Access-Control-Allow-Headers": "Content-Type"
-    },
-    body: JSON.stringify(body)
-  };
-}
+};
