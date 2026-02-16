@@ -1,35 +1,47 @@
 <script>
-document.addEventListener("DOMContentLoaded", function() {
+document.addEventListener("DOMContentLoaded", function () {
+  // ------------------------------
+  // Get calculator + lead data from sessionStorage
+  // ------------------------------
+  const resultsData = JSON.parse(sessionStorage.getItem("calc_results") || "{}");
 
-  const address =
-    new URLSearchParams(window.location.search).get("address") ||
-    localStorage.getItem("lead_address") ||
-    "Atlanta, GA";
+  // Fallbacks if sessionStorage empty
+  const address = resultsData.address || "Atlanta, GA";
+  const riskScore = resultsData.riskScore || 85;
 
-  const riskScore =
-    new URLSearchParams(window.location.search).get("riskScore") || 85;
+  // Display risk score
+  const riskEl = document.getElementById("riskScore");
+  if (riskEl) riskEl.textContent = riskScore;
 
-  document.getElementById("riskScore").textContent = riskScore;
+  // Optional: display lead info
+  const leadNameEl = document.getElementById("leadName");
+  if (leadNameEl) leadNameEl.textContent = `${resultsData.firstname || ""} ${resultsData.lastname || ""}`;
+  const emailEl = document.getElementById("leadEmail");
+  if (emailEl) emailEl.textContent = resultsData.email || "";
 
+  // ------------------------------
+  // Load Google Maps async safely
+  // ------------------------------
   function loadGoogleMaps() {
+    if (window.google && window.google.maps) {
+      initMap();
+      return;
+    }
 
     const script = document.createElement("script");
-
-    script.src =
-      "https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_MAPS_KEY }}&libraries=visualization,marker&callback=initMap";
-
+    script.src = "https://maps.googleapis.com/maps/api/js?key={{GOOGLE_MAPS_KEY}}&libraries=visualization,marker&callback=initMap";
     script.async = true;
     script.defer = true;
-
     document.head.appendChild(script);
   }
 
-  window.initMap = function() {
-
+  // ------------------------------
+  // Initialize Map with marker
+  // ------------------------------
+  window.initMap = function () {
     const geocoder = new google.maps.Geocoder();
 
-    geocoder.geocode({ address: address }, function(results, status) {
-
+    geocoder.geocode({ address: address }, function (results, status) {
       if (status !== "OK" || !results[0]) {
         console.error("Geocode failed:", status);
         return;
@@ -40,19 +52,16 @@ document.addEventListener("DOMContentLoaded", function() {
       const map = new google.maps.Map(document.getElementById("map"), {
         zoom: 13,
         center: loc,
-        mapId: "DEMO_MAP_ID"
+        mapId: "DEMO_MAP_ID" // replace with your actual map ID
       });
 
       new google.maps.marker.AdvancedMarkerElement({
-        map,
+        map: map,
         position: loc
       });
-
     });
-
   };
 
   loadGoogleMaps();
-
 });
 </script>
