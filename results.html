@@ -5,13 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Smart Home Security Results</title>
 <style>
-  body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 40px; }
-  .summary-card { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 30px; }
-  h2, h3 { margin-top: 0; }
-  ul { margin: 10px 0 0 20px; }
-  #map { width: 100%; height: 400px; border-radius: 12px; margin-top: 20px; }
-  .info { margin-top: 10px; font-size: 16px; }
+body { font-family: Arial, sans-serif; background: #f4f6f9; margin:0; padding:40px; }
+.container { max-width: 1200px; margin: 0 auto; }
+.summary-card { background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 30px; }
+h2, h3 { margin-top: 0; }
+ul { margin: 10px 0 0 20px; }
+#map { width: 100%; height: 400px; border-radius: 12px; margin-top: 20px; }
+.info { margin-top: 10px; font-size: 16px; }
+.status { margin-top: 20px; font-weight: 600; }
+button { padding: 12px 20px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; font-size: 16px; margin-top: 20px; }
+button:hover { background: #1e40af; }
 </style>
 </head>
 <body>
@@ -30,6 +33,9 @@
 
     <h3>Included Devices</h3>
     <ul id="summaryBullets"></ul>
+
+    <div class="status" id="res-status">Submitting your results...</div>
+    <button id="btnRetry" style="display:none;">Retry Submission</button>
   </div>
 
   <div id="map"></div>
@@ -37,20 +43,23 @@
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-
   // ------------------------------
   // Retrieve calculator + lead data
   // ------------------------------
   const resultsData = JSON.parse(sessionStorage.getItem("calc_results") || "{}");
+  if(!resultsData.email){
+    document.getElementById("res-status").textContent = "Error: No lead data found.";
+    return;
+  }
 
   const address = resultsData.address || "Atlanta, GA";
-  const riskScore = resultsData.riskScore || 85;
   const firstname = resultsData.firstname || "";
   const lastname = resultsData.lastname || "";
   const email = resultsData.email || "";
   const homeSize = resultsData.homeSize || "1000_1999";
   const complexity = resultsData.complexity || "standard";
   const installType = resultsData.installType || "diy";
+  const riskScore = resultsData.riskScore || 85;
 
   // Display lead info
   document.getElementById("leadName").textContent = firstname + " " + lastname;
@@ -59,7 +68,7 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("riskScore").textContent = riskScore;
 
   // ------------------------------
-  // Calculator logic for summary
+  // Calculator summary
   // ------------------------------
   const equipmentPrices = {
     under1000:{basic:300, standard:500, premium:800},
@@ -84,20 +93,17 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const bulletsEl = document.getElementById("summaryBullets");
   bulletsEl.innerHTML = "";
-  deviceList[complexity].forEach(d=>{
+  (resultsData.devices || deviceList[complexity]).forEach(d=>{
     const li = document.createElement("li");
     li.textContent = d;
     bulletsEl.appendChild(li);
   });
 
   // ------------------------------
-  // Async-safe Google Maps
+  // Google Maps async
   // ------------------------------
   function loadGoogleMaps() {
-    if (window.google && window.google.maps) {
-      initMap();
-      return;
-    }
+    if(window.google && window.google.maps) { initMap(); return; }
     const script = document.createElement("script");
     script.src = "https://maps.googleapis.com/maps/api/js?key={{GOOGLE_MAPS_KEY}}&libraries=visualization,marker&callback=initMap";
     script.async = true;
@@ -105,31 +111,50 @@ document.addEventListener("DOMContentLoaded", function () {
     document.head.appendChild(script);
   }
 
-  window.initMap = function () {
+  window.initMap = function() {
     const geocoder = new google.maps.Geocoder();
     geocoder.geocode({ address: address }, function(results, status) {
-      if (status !== "OK" || !results[0]) {
-        console.error("Geocode failed:", status);
-        return;
-      }
-
+      if(status !== "OK" || !results[0]) { console.error("Geocode failed:", status); return; }
       const loc = results[0].geometry.location;
-
-      const map = new google.maps.Map(document.getElementById("map"), {
-        zoom: 13,
-        center: loc,
-        mapId: "DEMO_MAP_ID" // replace with your real Map ID
-      });
-
-      new google.maps.marker.AdvancedMarkerElement({
-        map: map,
-        position: loc
-      });
+      const map = new google.maps.Map(document.getElementById("map"), { zoom:13, center: loc, mapId:"DEMO_MAP_ID" });
+      new google.maps.marker.AdvancedMarkerElement({ map, position: loc });
     });
   };
 
   loadGoogleMaps();
 
+  // ------------------------------
+  // Submit to Netlify HubSpot function
+  // ------------------------------
+  const statusEl = document.getElementById("res-status");
+  const btnRetry = document.getElementById("btnRetry");
+
+  async function submitLead() {
+    statusEl.textContent = "Submitting your results...";
+    btnRetry.style.display = "none";
+    try {
+      const res = await fetch("https://hubspotgate.netlify.app/.netlify/functions/submit-lead", {
+        method:"POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...resultsData,
+          equipment: total,
+          monitoring: monitor,
+          systemSummary: bulletsEl ? Array.from(bulletsEl.children).map(li=>li.textContent) : []
+        })
+      });
+      const result = await res.json();
+      if(res.ok) { statusEl.textContent = "✅ Your results have been submitted successfully!"; }
+      else { console.error(result); statusEl.textContent = "⚠️ Submission failed. Please retry."; btnRetry.style.display="inline-block"; }
+    } catch(err) {
+      console.error(err);
+      statusEl.textContent = "⚠️ Submission failed. Please retry.";
+      btnRetry.style.display="inline-block";
+    }
+  }
+
+  btnRetry.addEventListener("click", submitLead);
+  submitLead();
 });
 </script>
 
