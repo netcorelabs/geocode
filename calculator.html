@@ -3,157 +3,84 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Security Estimate Calculator</title>
+<title>Smart Home Security Calculator</title>
 
 <style>
 body {
-  margin: 0;
-  font-family: "Segoe UI", sans-serif;
-  background: linear-gradient(135deg,#ffffff,#e0f2fe);
+    margin: 0;
+    font-family: "Segoe UI", sans-serif;
+    background: linear-gradient(135deg,#f8fafc,#e0f2fe);
 }
 
-.calculator-wrapper {
-  max-width: 1000px;
-  margin: 60px auto;
-  padding: 40px;
+.calculator-container {
+    max-width: 640px;
+    margin: 60px auto;
+    padding: 40px;
+    border-radius: 20px;
+    background: white;
+    box-shadow: 0 20px 60px rgba(0,0,0,.08);
 }
 
-.lead-summary {
-  background: #ffffff;
-  padding: 25px;
-  border-radius: 15px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.08);
-  margin-bottom: 40px;
+.calculator-container h2 {
+    text-align: center;
+    margin-bottom: 30px;
 }
 
-.lead-summary h3 {
-  margin-top: 0;
+.calculator-container label {
+    display: block;
+    margin-bottom: 20px;
+    font-weight: 500;
 }
 
-.lead-summary p {
-  margin: 6px 0;
-  font-size: 15px;
+.calculator-container input,
+.calculator-container select {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    margin-top: 6px;
 }
 
-.result-grid {
-  display: grid;
-  gap: 40px;
-}
-
-.score-card {
-  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color: white;
-  padding: 50px;
-  border-radius: 20px;
-  text-align: center;
-}
-
-#riskScore {
-  font-size: 70px;
-  margin: 0;
-}
-
-.question-block {
-  background: white;
-  padding: 25px;
-  border-radius: 15px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.08);
-  margin-top: 30px;
-}
-
-button {
-  margin-top: 20px;
-  padding: 14px 20px;
-  border-radius: 12px;
-  border: none;
-  background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-  width: 100%;
+.calculator-container button {
+    width: 100%;
+    padding: 16px;
+    border-radius: 14px;
+    border: none;
+    background: linear-gradient(135deg,#1e3a8a,#0ea5e9);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 16px;
 }
 </style>
 </head>
-
 <body>
 
-<div class="calculator-wrapper">
+<section id="calculator-root">
+  <!-- JS will inject calculator UI here -->
+</section>
 
-  <!-- Lead Info Display -->
-  <div class="lead-summary">
-    <h3>Your Information</h3>
-    <p><strong>Name:</strong> <span id="display-name"></span></p>
-    <p><strong>Email:</strong> <span id="display-email"></span></p>
-    <p><strong>Phone:</strong> <span id="display-phone"></span></p>
-    <p><strong>Address:</strong> <span id="display-address"></span></p>
-  </div>
-
-  <!-- Score Display -->
-  <div class="result-grid">
-    <div class="score-card">
-      <h2 id="riskScore">--</h2>
-      <p>Security Readiness Score</p>
-    </div>
-  </div>
-
-  <!-- Simple Calculator Questions -->
-  <div class="question-block">
-    <h3>Quick Security Questions</h3>
-
-    <label>
-      <input type="checkbox" id="alarm">
-      I already have an alarm system
-    </label><br><br>
-
-    <label>
-      <input type="checkbox" id="cameras">
-      I have security cameras installed
-    </label><br><br>
-
-    <label>
-      <input type="checkbox" id="monitoring">
-      I have professional monitoring
-    </label>
-
-    <button onclick="calculateScore()">Calculate My Score</button>
-  </div>
-
-</div>
+<script src="/js/hsc-calculator.js"></script>
 
 <script>
-document.addEventListener("DOMContentLoaded", function () {
-
-  // Get URL parameters
-  const params = new URLSearchParams(window.location.search);
-
-  const firstname = params.get("firstname") || "";
-  const lastname  = params.get("lastname") || "";
-  const email     = params.get("email") || "";
-  const phone     = params.get("phone") || "";
-  const address   = params.get("address") || "";
-
-  // Display lead info
-  document.getElementById("display-name").textContent =
-    firstname + " " + lastname;
-
-  document.getElementById("display-email").textContent = email;
-  document.getElementById("display-phone").textContent = phone;
-  document.getElementById("display-address").textContent = address;
-
+document.addEventListener("DOMContentLoaded", function() {
+    // Auto-fill fields from lead data if available
+    const leadData = sessionStorage.getItem("lead_data");
+    if(leadData) {
+        const data = JSON.parse(leadData);
+        // Wait for calculator elements to be injected
+        const interval = setInterval(() => {
+            const homeInput = document.getElementById("home-value");
+            const levelSelect = document.getElementById("security-level");
+            if(homeInput && levelSelect) {
+                clearInterval(interval);
+                // Example: pre-fill home value from some logic or leave blank
+                if(data.home_value) homeInput.value = data.home_value;
+            }
+        }, 50);
+    }
 });
-
-function calculateScore() {
-
-  let score = 50;
-
-  if (document.getElementById("alarm").checked) score += 15;
-  if (document.getElementById("cameras").checked) score += 20;
-  if (document.getElementById("monitoring").checked) score += 15;
-
-  if (score > 100) score = 100;
-
-  document.getElementById("riskScore").textContent = score;
-}
 </script>
 
 </body>
