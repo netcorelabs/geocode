@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Smart Home Security Calculator</title>
-
 <style>
 body {
     margin: 0;
@@ -12,7 +11,7 @@ body {
     background: linear-gradient(135deg,#f8fafc,#e0f2fe);
 }
 
-.calculator-container {
+.hsc-calculator {
     max-width: 640px;
     margin: 60px auto;
     padding: 40px;
@@ -21,9 +20,10 @@ body {
     box-shadow: 0 20px 60px rgba(0,0,0,.08);
 }
 
-.calculator-container h2 {
+.hsc-calculator h2 {
     text-align: center;
     margin-bottom: 30px;
+    font-size: 28px;
 }
 
 .calculator-container label {
@@ -57,30 +57,32 @@ body {
 </head>
 <body>
 
-<section id="calculator-root">
-  <!-- JS will inject calculator UI here -->
+<section class="hsc-calculator">
+  <h2>Smart Home Security Calculator</h2>
+  <div id="calculator-root"></div>
 </section>
 
 <script src="/js/hsc-calculator.js"></script>
 
 <script>
-document.addEventListener("DOMContentLoaded", function() {
-    // Auto-fill fields from lead data if available
-    const leadData = sessionStorage.getItem("lead_data");
-    if(leadData) {
+(function() {
+    // Auto-fill from lead data if exists
+    document.addEventListener("DOMContentLoaded", function() {
+        const leadData = sessionStorage.getItem("lead_data");
+        if(!leadData) return;
+
         const data = JSON.parse(leadData);
-        // Wait for calculator elements to be injected
         const interval = setInterval(() => {
             const homeInput = document.getElementById("home-value");
             const levelSelect = document.getElementById("security-level");
             if(homeInput && levelSelect) {
                 clearInterval(interval);
-                // Example: pre-fill home value from some logic or leave blank
+                // Optionally pre-fill home value if available
                 if(data.home_value) homeInput.value = data.home_value;
             }
         }, 50);
-    }
-});
+    });
+})();
 </script>
 
 </body>
