@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -62,8 +63,28 @@ select,input {
   border-radius:var(--radius);
   display:flex;
   justify-content:space-between;
+  flex-direction:column;
+  gap:10px;
+}
+
+.total-box {
+  display:flex;
+  justify-content:space-between;
   font-size:18px;
   font-weight:bold;
+}
+
+.total-value {
+  font-size:24px;
+}
+
+.device-summary {
+  font-size:14px;
+  background:rgba(255,255,255,0.15);
+  padding:10px;
+  border-radius:var(--radius);
+  max-height:120px;
+  overflow-y:auto;
 }
 
 button {
@@ -107,25 +128,30 @@ button {
 <div class="section card-box">
 <h2>Security Devices</h2>
 <div class="grid">
-  <div><label>Indoor Cameras</label><input id="indoorCam" type="number" value="0"></div>
-  <div><label>Outdoor Cameras</label><input id="outdoorCam" type="number" value="0"></div>
-  <div><label>Video Doorbells</label><input id="doorbell" type="number" value="0"></div>
-  <div><label>Smart Locks</label><input id="lock" type="number" value="0"></div>
-  <div><label>Door Sensors</label><input id="doorSensor" type="number" value="0"></div>
-  <div><label>Window Sensors</label><input id="windowSensor" type="number" value="0"></div>
-  <div><label>Motion Sensors</label><input id="motion" type="number" value="0"></div>
-  <div><label>Glass Break Sensors</label><input id="glass" type="number" value="0"></div>
-  <div><label>Smoke / CO Detectors</label><input id="smoke" type="number" value="0"></div>
-  <div><label>Water Leak Sensors</label><input id="water" type="number" value="0"></div>
-  <div><label>Keypads</label><input id="keypad" type="number" value="0"></div>
-  <div><label>Sirens</label><input id="siren" type="number" value="0"></div>
+  <div><label>Indoor Cameras</label><input id="indoorCam" type="number" value="0" min="0"></div>
+  <div><label>Outdoor Cameras</label><input id="outdoorCam" type="number" value="0" min="0"></div>
+  <div><label>Video Doorbells</label><input id="doorbell" type="number" value="0" min="0"></div>
+  <div><label>Smart Locks</label><input id="lock" type="number" value="0" min="0"></div>
+  <div><label>Door Sensors</label><input id="doorSensor" type="number" value="0" min="0"></div>
+  <div><label>Window Sensors</label><input id="windowSensor" type="number" value="0" min="0"></div>
+  <div><label>Motion Sensors</label><input id="motion" type="number" value="0" min="0"></div>
+  <div><label>Glass Break Sensors</label><input id="glass" type="number" value="0" min="0"></div>
+  <div><label>Smoke / CO Detectors</label><input id="smoke" type="number" value="0" min="0"></div>
+  <div><label>Water Leak Sensors</label><input id="water" type="number" value="0" min="0"></div>
+  <div><label>Keypads</label><input id="keypad" type="number" value="0" min="0"></div>
+  <div><label>Sirens</label><input id="siren" type="number" value="0" min="0"></div>
 </div>
 </div>
 
 <!-- TOTALS -->
 <div class="totals card-box">
-  <div id="upfront">$0 Upfront</div>
-  <div id="monthly">$0 / month</div>
+  <div class="total-box">
+    <div>Upfront:</div> <div class="total-value" id="upfront">$0</div>
+  </div>
+  <div class="total-box">
+    <div>Monthly:</div> <div class="total-value" id="monthly">$0</div>
+  </div>
+  <div class="device-summary" id="device-summary">No devices selected</div>
 </div>
 
 <button id="submitBtn">Get My Security Quote</button>
@@ -182,7 +208,7 @@ fill("tier",catalog.tiers,o=>o.name);
 fill("install",catalog.install,o=>o.name);
 fill("monitoring",catalog.monitoring,o=>`${o.name} ($${o.monthly}/mo)`);
 
-// ===== CALC =====
+// ===== CALC & LIVE ANIMATION =====
 function calc(){
   const tierSel=catalog.tiers.find(x=>x.id===document.getElementById("tier").value);
   const instSel=catalog.install.find(x=>x.id===document.getElementById("install").value);
@@ -191,23 +217,45 @@ function calc(){
   let upfront = tierSel.price + instSel.cost;
   let monthly = monSel.monthly;
 
+  const summary = [];
   Object.keys(catalog.devices).forEach(k=>{
-    upfront += (Number(document.getElementById(k).value)||0) * catalog.devices[k];
+    const qty = Number(document.getElementById(k).value)||0;
+    if(qty>0){
+      upfront += qty*catalog.devices[k];
+      summary.push(`${qty} x ${k}`);
+    }
   });
 
   window.calcData = {upfront,monthly};
 
-  document.getElementById("upfront").textContent = `$${Math.round(upfront)} Upfront`;
-  document.getElementById("monthly").textContent = `$${monthly}/month`;
+  // Animate numbers
+  animateValue(document.getElementById("upfront"), window.calcData.prevUpfront||0, upfront, 400);
+  animateValue(document.getElementById("monthly"), window.calcData.prevMonthly||0, monthly, 400);
+
+  window.calcData.prevUpfront = upfront;
+  window.calcData.prevMonthly = monthly;
+
+  document.getElementById("device-summary").textContent = summary.length? summary.join(", ") : "No devices selected";
+}
+
+// Simple animation for totals
+function animateValue(el, start, end, duration) {
+  let startTime = null;
+  const step = timestamp => {
+    if (!startTime) startTime = timestamp;
+    const progress = Math.min((timestamp - startTime)/duration,1);
+    el.textContent = `$${Math.round(start + (end-start)*progress)}` + (el.id==="monthly" ? "/mo" : "");
+    if(progress<1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
 }
 
 // ===== EVENT LISTENERS =====
-document.querySelectorAll("select,input").forEach(e=>e.addEventListener("change",calc));
+document.querySelectorAll("select,input").forEach(e=>e.addEventListener("input",calc));
 calc();
 
 // ===== HUBSPOT & RESULTS SUBMIT =====
 document.getElementById("submitBtn").addEventListener("click", function(){
-  // Send to HubSpot (Netlify keys if needed)
   const leadData = {
     tier: document.getElementById("tier").value,
     install: document.getElementById("install").value,
@@ -223,8 +271,7 @@ document.getElementById("submitBtn").addEventListener("click", function(){
   // Store for results page
   sessionStorage.setItem("calcData", JSON.stringify(leadData));
 
-  // Optional: send to HubSpot using their API or embed form
-  // Example: HubSpot form POST (replace with your form ID / endpoint)
+  // Optional: send to HubSpot endpoint (define window.netlifyHubspotEndpoint in Netlify)
   if(window.netlifyHubspotEndpoint){
     fetch(window.netlifyHubspotEndpoint,{
       method:"POST",
@@ -233,7 +280,6 @@ document.getElementById("submitBtn").addEventListener("click", function(){
     }).catch(console.error);
   }
 
-  // Redirect to results page
   window.location.href = "results.html";
 });
 </script>
