@@ -1,7 +1,6 @@
 [build]
   functions = "netlify/functions"
+  publish = "."
 
-[[redirects]]
-  from = "/api/crime"
-  to = "/.netlify/functions/crime"
-  status = 200
+[functions]
+  node_bundler = "esbuild"
