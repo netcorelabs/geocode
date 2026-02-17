@@ -1,15 +1,23 @@
-const fetch = require("node-fetch");
-
 exports.handler = async function(event) {
 
-  const FBI_KEY = process.env.FBI_API_KEY;
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, OPTIONS"
+  };
 
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 200, headers, body: "" };
+  }
+
+  const FBI_KEY = process.env.FBI_API_KEY;
   const { state } = event.queryStringParameters || {};
 
   if (!state) {
     return {
       statusCode: 400,
-      body: JSON.stringify({ error: "State is required" })
+      headers,
+      body: JSON.stringify({ error: "State required" })
     };
   }
 
@@ -23,15 +31,15 @@ exports.handler = async function(event) {
 
     return {
       statusCode: 200,
+      headers,
       body: JSON.stringify(data)
     };
 
   } catch (error) {
-
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "FBI API fetch failed" })
+      headers,
+      body: JSON.stringify({ error: "FBI fetch failed" })
     };
-
   }
 };
