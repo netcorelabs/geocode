@@ -7,36 +7,22 @@ exports.handler = async function(event) {
   };
 
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "" };
-  }
-
-  const { lat, lng } = event.queryStringParameters || {};
-
-  if (!lat || !lng) {
     return {
-      statusCode: 400,
+      statusCode: 200,
       headers,
-      body: JSON.stringify({ error: "Missing coordinates" })
+      body: ""
     };
   }
-
-  // SIMPLE TEST RESPONSE (to confirm function works)
 
   return {
     statusCode: 200,
     headers,
     body: JSON.stringify({
-      test: "Function working",
-      lat,
-      lng,
-      riskScore: 55,
-      exposureScore: 42,
-      responseMinutes: 7,
-      violent: 100,
-      property: 250,
-      zone: "Moderate"
+      status: "security-risk function live",
+      timestamp: Date.now()
     })
   };
 };
+
 
 
