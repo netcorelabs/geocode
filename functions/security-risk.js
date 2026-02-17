@@ -1,32 +1,54 @@
 const fetch = require("node-fetch");
 
-let cache = {}; // simple memory cache
+let cache = {};
 
 exports.handler = async function(event) {
+
+  /* ================= CORS HEADERS ================= */
+
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, OPTIONS"
+  };
+
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers,
+      body: ""
+    };
+  }
+
+  /* ================= ENV KEYS ================= */
 
   const GOOGLE_KEY = process.env.GOOGLE_API_KEY;
   const FBI_KEY = process.env.FBI_API_KEY;
 
-  const { lat, lng, indoorCam, outdoorCam, doorbell, lock } = event.queryStringParameters;
+  const { lat, lng, indoorCam, outdoorCam, doorbell, lock } =
+    event.queryStringParameters || {};
 
   if (!lat || !lng) {
-    return { statusCode: 400, body: "Missing coordinates" };
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: "Missing coordinates" })
+    };
   }
 
-  const cacheKey = `${lat}_${lng}`;
+  const cacheKey = `${lat}_${lng}_${indoorCam}_${outdoorCam}_${doorbell}_${lock}`;
 
   if (cache[cacheKey]) {
     return {
       statusCode: 200,
+      headers,
       body: JSON.stringify(cache[cacheKey])
     };
   }
 
   try {
 
-    /* ===============================
-       GOOGLE PLACES (EMERGENCY)
-    ============================== */
+    /* ================= GOOGLE PLACES ================= */
 
     const types = ["police","fire_station","hospital"];
     let nearestDistance = 999999;
@@ -57,9 +79,7 @@ exports.handler = async function(event) {
 
     const responseMinutes = Math.round((nearestDistance/1000)/0.8);
 
-    /* ===============================
-       FBI STATE DATA
-    ============================== */
+    /* ================= FBI DATA ================= */
 
     const fbiRes = await fetch(
       `https://api.usa.gov/crime/fbi/sapi/api/summarized/state/ca/all?api_key=${FBI_KEY}`
@@ -75,9 +95,7 @@ exports.handler = async function(event) {
       property = fbiData.results.find(x=>x.offense==="property-crime")?.actual || 0;
     }
 
-    /* ===============================
-       RISK ENGINE (BACKEND)
-    ============================== */
+    /* ================= BACKEND RISK ENGINE ================= */
 
     let riskScore = 50;
 
@@ -91,19 +109,11 @@ exports.handler = async function(event) {
 
     riskScore = Math.min(100, riskScore);
 
-    /* ===============================
-       EXPOSURE SCORE
-    ============================== */
-
-    let exposureScore = Math.floor(Math.random() * 100);
-
-    /* ===============================
-       NORMALIZATION
-    ============================== */
-
     let zone = "Low";
     if (riskScore >= 70) zone = "High";
     else if (riskScore >= 40) zone = "Moderate";
+
+    const exposureScore = Math.floor(Math.random() * 100);
 
     const result = {
       violent,
@@ -114,14 +124,21 @@ exports.handler = async function(event) {
       zone
     };
 
-    cache[cacheKey] = result; // cache it
+    cache[cacheKey] = result;
 
     return {
       statusCode: 200,
+      headers,
       body: JSON.stringify(result)
     };
 
   } catch (err) {
-    return { statusCode: 500, body: "Risk engine failure" };
+
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: "Risk engine failure" })
+    };
   }
 };
+
