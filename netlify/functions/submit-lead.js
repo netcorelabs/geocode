@@ -60,6 +60,7 @@ export async function handler(event) {
       context: { pageUri: data.pageUri || "" }
     };
 
+    
     const res = await fetch(
       `https://api.hsforms.com/submissions/v3/integration/submit/${HUBSPOT_PORTAL_ID}/${HUBSPOT_FORM_ID}`,
       {
