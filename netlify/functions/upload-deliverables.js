@@ -2,15 +2,21 @@
 export async function handler(event) {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
+    "https://homesecurecalculator.com",
+    "https://www.netcoreleads.com",
+    "https://netcoreleads.com",
+    "https://api.netcoreleads.com",
     "https://hubspotgate.netlify.app",
   ];
 
   function corsHeaders(origin) {
-    const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+    const safeOrigin = origin || allowedOrigins[0];
+    const allowedOrigin = allowedOrigins.includes(safeOrigin) ? safeOrigin : allowedOrigins[0];
     return {
       "Access-Control-Allow-Origin": allowedOrigin,
       "Access-Control-Allow-Headers": "Content-Type",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Vary": "Origin",
     };
   }
 
@@ -67,7 +73,7 @@ export async function handler(event) {
   }
 
   async function uploadPrivateFile({ buffer, filename, mime }) {
-    // Files upload uses multipart/form-data with options={"access":"PRIVATE"}. :contentReference[oaicite:10]{index=10}
+    // Files upload uses multipart/form-data with options={"access":"PRIVATE"}.
     const form = new FormData();
     form.append("file", new Blob([buffer], { type: mime }), filename);
     form.append("fileName", filename);
