@@ -4,15 +4,21 @@ import crypto from "node:crypto";
 export async function handler(event) {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
+    "https://homesecurecalculator.com",
+    "https://www.netcoreleads.com",
+    "https://netcoreleads.com",
+    "https://api.netcoreleads.com",
     "https://hubspotgate.netlify.app",
   ];
 
   function corsHeaders(origin) {
-    const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+    const safeOrigin = origin || allowedOrigins[0];
+    const allowedOrigin = allowedOrigins.includes(safeOrigin) ? safeOrigin : allowedOrigins[0];
     return {
       "Access-Control-Allow-Origin": allowedOrigin,
       "Access-Control-Allow-Headers": "Content-Type",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Vary": "Origin",
     };
   }
 
@@ -25,7 +31,11 @@ export async function handler(event) {
 
   const HS_TOKEN = process.env.HUBSPOT_PRIVATE_APP_TOKEN || "";
   if (!HS_TOKEN) {
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }),
+    };
   }
 
   const HS_HEADERS = { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" };
@@ -130,7 +140,7 @@ export async function handler(event) {
   async function findDealByLeadId(leadId) {
     const r = await hsPost("/crm/v3/objects/deals/search", {
       filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
-      properties: ["lead_id","listing_status","lead_price"],
+      properties: ["lead_id", "listing_status", "lead_price"],
       limit: 1,
     });
     return r.ok && r.json?.results?.[0] ? r.json.results[0] : null;
@@ -144,12 +154,12 @@ export async function handler(event) {
 
   async function getLineItemAssociations(dealId) {
     const r = await hsGet(`/crm/v3/objects/deals/${dealId}/associations/line_items`);
-    const ids = (r.json?.results || []).map(x => x.id).filter(Boolean);
+    const ids = (r.json?.results || []).map((x) => x.id).filter(Boolean);
     return ids;
   }
 
   async function createLineItemForDeal({ dealId, leadId, price, description, name }) {
-    // Create + associate in one call using associationTypeId 20. :contentReference[oaicite:8]{index=8}
+    // Create + associate in one call using associationTypeId 20 (line item -> deal)
     const r = await hsPost("/crm/v3/objects/line_items", {
       properties: {
         name,
@@ -175,10 +185,15 @@ export async function handler(event) {
 
     const email = normalizeSpaces(payload.email);
     if (!email) {
-      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing payload.email" }) };
+      return {
+        statusCode: 400,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({ error: "Missing payload.email" }),
+      };
     }
 
-    const lead_id = normalizeSpaces(payload.lead_id) ||
+    const lead_id =
+      normalizeSpaces(payload.lead_id) ||
       (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
     const home_ownership = normalizeOwnership(payload.home_ownership);
@@ -270,6 +285,10 @@ export async function handler(event) {
     };
   } catch (err) {
     console.error("hubspot-sync error:", err);
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: err.message }) };
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: err.message }),
+    };
   }
 }
