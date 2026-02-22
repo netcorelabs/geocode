@@ -1,384 +1,275 @@
 // netlify/functions/hubspot-sync.js
-// Upsert HubSpot contact from HSC flow payload + risk.
-// Requires env var: HUBSPOT_PRIVATE_APP_TOKEN
-// Optional env var: HUBSPOT_PORTAL_ID (not required for CRM API upsert)
+import crypto from "node:crypto";
 
-const ALLOWED_ORIGINS = [
-  "https://www.homesecurecalculator.com",
-  "https://homesecurecalculator.com",
-  "https://hubspotgate.netlify.app",
-];
-
-const corsHeaders = (origin) => {
-  const o = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
-  return {
-    "Access-Control-Allow-Origin": o,
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
-  };
-};
-
-function json(statusCode, origin, bodyObj, extraHeaders = {}) {
-  return {
-    statusCode,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...corsHeaders(origin),
-      ...extraHeaders,
-    },
-    body: JSON.stringify(bodyObj),
-  };
-}
-
-function safeStr(v) {
-  if (v === null || v === undefined) return "";
-  return String(v).trim();
-}
-
-function safeNum(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function toISODateTime() {
-  return new Date().toISOString();
-}
-
-// --- US State full name lookup (optional) ---
-const US_STATE_NAMES = {
-  AL:"Alabama", AK:"Alaska", AZ:"Arizona", AR:"Arkansas", CA:"California", CO:"Colorado", CT:"Connecticut",
-  DE:"Delaware", FL:"Florida", GA:"Georgia", HI:"Hawaii", ID:"Idaho", IL:"Illinois", IN:"Indiana", IA:"Iowa",
-  KS:"Kansas", KY:"Kentucky", LA:"Louisiana", ME:"Maine", MD:"Maryland", MA:"Massachusetts", MI:"Michigan",
-  MN:"Minnesota", MS:"Mississippi", MO:"Missouri", MT:"Montana", NE:"Nebraska", NV:"Nevada", NH:"New Hampshire",
-  NJ:"New Jersey", NM:"New Mexico", NY:"New York", NC:"North Carolina", ND:"North Dakota", OH:"Ohio", OK:"Oklahoma",
-  OR:"Oregon", PA:"Pennsylvania", RI:"Rhode Island", SC:"South Carolina", SD:"South Dakota", TN:"Tennessee",
-  TX:"Texas", UT:"Utah", VT:"Vermont", VA:"Virginia", WA:"Washington", WV:"West Virginia", WI:"Wisconsin", WY:"Wyoming",
-  DC:"District of Columbia"
-};
-
-// =====================================================
-//  HUBSPOT PROPERTY MAPPING (EDIT THIS IF NEEDED)
-//  LEFT = our canonical keys (what we store in hsc_payload)
-//  RIGHT = your HubSpot INTERNAL property names
-//
-//  IMPORTANT:
-//  Your list includes many LABELS (e.g., "First Name").
-//  HubSpot API needs INTERNAL names (e.g., "firstname").
-// =====================================================
-const PROP_MAP = {
-  // Standard HubSpot contact props
-  firstname: "firstname",
-  lastname: "lastname",
-  email: "email",
-  city: "city",
-  state_code: "state",       // State/Region Code (standard is "state" = abbreviation)
-  state_name: "state_region",// IF you created a custom "State/Region" text prop, put its internal name here
-  zip: "zip",                // postal code
-  street_address: "address", // Street Address (ONLY number + street name)
-
-  // Optional standard
-  timezone: "time_zone",     // if you created custom "Time Zone" internal name; if not, delete this line
-  ip_timezone: "ip_timezone",// if you created custom "IP Timezone" internal name; if not, delete this line
-  ip_state_code: "ip_state_code_region_code", // custom internal name
-  ip_state_name: "ip_state_region",           // custom internal name
-
-  // Your HSC custom fields (these look like your internal names already)
-  hsc_devices: "hsc_devices",
-  hsc_monthly: "hsc_monthly",
-  hsc_upfront: "hsc_upfront",
-  hsc_property_address: "hsc_property_address",
-  hsc_risk_score: "hsc_risk_score",
-  hsc_system_tier: "hsc_system_tier",
-
-  // Additional fields you listed (make sure internal names match)
-  installation_tier: "installation_tier",
-  installation_type: "installation_type",
-  service_plan: "service_plan",
-  system_tier: "system_tier",
-  smart_locks: "smart_locks",
-
-  // UTM fields (these look standard-ish / custom)
-  utm_campaign: "utm_campaign",
-  utm_content: "utm_content",
-  utm_source: "utm_source",
-  utm_term: "utm_term",
-  utm_data: "utm_data",
-
-  // If you truly want to write into Total Revenue (must exist as contact property)
-  total_revenue: "total_revenue",
-
-  // If you have these (otherwise remove)
-  home_ownership: "home_ownership",
-  home_size: "home_size",
-
-  // You listed Solar fields; include only if you actually have these properties on contacts
-  solar_installer: "solar_installer",
-  solar_kw: "solar_kw",
-};
-
-// Allowlist of values we’ll actually send (prevents HubSpot 400 errors from unknown keys)
-const CANONICAL_ALLOWLIST = new Set(Object.keys(PROP_MAP));
-
-// Build hsc_devices string from structured deviceLines OR deviceSummary OR raw counts
-function buildDeviceSummary(payload) {
-  const dl = Array.isArray(payload.deviceLines) ? payload.deviceLines : null;
-  if (dl && dl.length) {
-    const parts = dl
-      .filter(x => Number(x.qty) > 0)
-      .map(x => `${safeStr(x.label)} x${Number(x.qty)}`);
-    return parts.length ? parts.join(", ") : "No devices selected";
-  }
-  const s = safeStr(payload.deviceSummary || payload.hsc_devices);
-  if (s) return s;
-
-  // fallback from common keys
-  const fallback = [];
-  const pairs = [
-    ["Indoor Cameras", payload.indoorCam],
-    ["Outdoor Cameras", payload.outdoorCam],
-    ["Video Doorbell", payload.doorbell],
-    ["Smart Locks", payload.lock],
-    ["Door Sensors", payload.doorSensor],
-    ["Window Sensors", payload.windowSensor],
-    ["Motion Sensors", payload.motion],
-    ["Glass Break Sensors", payload.glass],
-    ["Smoke/CO", payload.smoke],
-    ["Water Leak", payload.water],
-    ["Keypads", payload.keypad],
-    ["Sirens", payload.siren],
+export async function handler(event) {
+  const allowedOrigins = [
+    "https://www.homesecurecalculator.com",
+    "https://hubspotgate.netlify.app",
   ];
-  pairs.forEach(([label, v]) => {
-    const n = Number(v || 0);
-    if (n > 0) fallback.push(`${label} x${n}`);
-  });
-  return fallback.length ? fallback.join(", ") : "No devices selected";
-}
 
-function pickCanonical(body) {
-  // Accept either { payload, risk } or raw payload
-  const payload = body && typeof body === "object" ? (body.payload || body) : {};
-  const risk = body && typeof body === "object" ? (body.risk || null) : null;
-  return { payload, risk };
-}
-
-function normalizeCanonical(payload, risk) {
-  // Canonical keys we will map to HubSpot
-  const out = {};
-
-  out.firstname = safeStr(payload.firstname || payload["First Name"]);
-  out.lastname  = safeStr(payload.lastname  || payload["Last Name"]);
-  out.email     = safeStr(payload.email     || payload["Email"]);
-  out.city      = safeStr(payload.city      || payload["City"]);
-  out.zip       = safeStr(payload.zip       || payload["postal code"] || payload.postal_code);
-
-  // Address format requirement: ONLY street number + street name
-  out.street_address = safeStr(
-    payload.street_address ||
-    payload.streetAddress ||
-    payload["Street Address"] ||
-    payload.address_line1 ||
-    ""
-  );
-
-  // State code + name
-  const st = safeStr(payload.state_code || payload.state || payload["State/Region Code"] || payload.state_region_code);
-  out.state_code = st;
-  out.state_name = safeStr(payload.state_name || payload["State/Region"] || US_STATE_NAMES[st] || "");
-
-  // Timezones (from browser usually)
-  out.timezone = safeStr(payload.timezone || payload["Time Zone"] || "");
-  out.ip_timezone = safeStr(payload.ip_timezone || payload["IP Timezone"] || "");
-
-  // IP State (we’ll default to address state unless you pass IP-derived values)
-  out.ip_state_code = safeStr(payload.ip_state_code || payload["IP State Code/Region Code"] || st);
-  out.ip_state_name = safeStr(payload.ip_state_name || payload["IP State/Region"] || (US_STATE_NAMES[out.ip_state_code] || ""));
-
-  // HSC financials
-  out.hsc_monthly = safeNum(payload.hsc_monthly ?? payload.monthly ?? 0);
-  out.hsc_upfront = safeNum(payload.hsc_upfront ?? payload.upfront ?? 0);
-
-  // Full formatted address (safe to store separately)
-  out.hsc_property_address = safeStr(payload.hsc_property_address || payload.address_full || payload.address || payload.geo?.formatted || "");
-
-  // Risk score
-  const riskScore =
-    (risk && risk.scoring && Number.isFinite(Number(risk.scoring.riskScore)) ? Number(risk.scoring.riskScore) : null) ??
-    (Number.isFinite(Number(payload.hsc_risk_score)) ? Number(payload.hsc_risk_score) : null) ??
-    null;
-
-  if (riskScore !== null) out.hsc_risk_score = Math.round(riskScore);
-
-  // System tier / plan / install
-  out.hsc_system_tier = safeStr(payload.hsc_system_tier || payload.tierName || payload.tier || payload.systemTier || payload["System tier"] || payload["System tier"] || "");
-  out.system_tier     = safeStr(payload.system_tier || payload["System tier"] || out.hsc_system_tier || "");
-  out.service_plan    = safeStr(payload.service_plan || payload.monitoringName || payload.monitoring || payload.monitorPlan || payload["Service plan"] || "");
-  out.installation_tier = safeStr(payload.installation_tier || payload.installName || payload.install || payload.installTier || payload["Installation tier"] || "");
-  out.installation_type = safeStr(payload.installation_type || payload.installMode || payload["installation_type"] || payload["installation_type"] || "");
-
-  // Locks count
-  out.smart_locks = safeNum(payload.smart_locks ?? payload.lock ?? 0);
-
-  // Home details (if you collect them)
-  out.home_ownership = safeStr(payload.home_ownership || payload["Home Ownership"] || "");
-  out.home_size = safeStr(payload.home_size || payload["Home size"] || "");
-
-  // Devices summary string
-  out.hsc_devices = buildDeviceSummary(payload);
-
-  // UTMs
-  out.utm_campaign = safeStr(payload.utm_campaign || payload.utm?.campaign || "");
-  out.utm_content  = safeStr(payload.utm_content  || payload.utm?.content  || "");
-  out.utm_source   = safeStr(payload.utm_source   || payload.utm?.source   || "");
-  out.utm_term     = safeStr(payload.utm_term     || payload.utm?.term     || "");
-
-  // Store “UTM Data” as a compact JSON string if you want
-  const utmObj = {
-    utm_source: out.utm_source,
-    utm_campaign: out.utm_campaign,
-    utm_content: out.utm_content,
-    utm_term: out.utm_term,
-    first_seen: safeStr(payload.utm_first_seen || ""),
-    last_seen: safeStr(payload.utm_last_seen || ""),
-  };
-  out.utm_data = JSON.stringify(utmObj);
-
-  // Total Revenue (optional) — many users set this elsewhere; only keep if you want it
-  out.total_revenue = Math.round(out.hsc_upfront || 0);
-
-  // (Solar fields ignored unless you use them)
-  out.solar_installer = safeStr(payload.solar_installer || payload["Solar installer"] || "");
-  out.solar_kw = safeStr(payload.solar_kw || payload["Solar kW"] || "");
-
-  // Final: remove any keys not in allowlist OR empty strings (except email)
-  const cleaned = {};
-  for (const [k, v] of Object.entries(out)) {
-    if (!CANONICAL_ALLOWLIST.has(k)) continue;
-    if (k === "email") {
-      if (safeStr(v)) cleaned[k] = safeStr(v);
-      continue;
-    }
-    if (typeof v === "number") {
-      cleaned[k] = v;
-      continue;
-    }
-    const s = safeStr(v);
-    if (s) cleaned[k] = s;
+  function corsHeaders(origin) {
+    const allowedOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+    return {
+      "Access-Control-Allow-Origin": allowedOrigin,
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    };
   }
-
-  return cleaned;
-}
-
-function mapToHubSpotProps(canonical) {
-  const props = {};
-  for (const [canonKey, value] of Object.entries(canonical)) {
-    const hsKey = PROP_MAP[canonKey];
-    if (!hsKey) continue;
-    props[hsKey] = value;
-  }
-  return props;
-}
-
-async function hsFetch(path, token, opts = {}) {
-  const url = `https://api.hubapi.com${path}`;
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(opts.headers || {}),
-    },
-  });
-  const txt = await res.text();
-  let jsonBody = null;
-  try { jsonBody = txt ? JSON.parse(txt) : null; } catch {}
-  return { ok: res.ok, status: res.status, body: jsonBody || txt };
-}
-
-async function findContactIdByEmail(email, token) {
-  const searchBody = {
-    filterGroups: [
-      { filters: [{ propertyName: "email", operator: "EQ", value: email }] }
-    ],
-    properties: ["email"],
-    limit: 1,
-  };
-
-  const r = await hsFetch("/crm/v3/objects/contacts/search", token, {
-    method: "POST",
-    body: JSON.stringify(searchBody),
-  });
-
-  if (!r.ok) return null;
-  const id = r.body?.results?.[0]?.id || null;
-  return id;
-}
-
-exports.handler = async function (event) {
-  const origin = event.headers?.origin || event.headers?.Origin || "";
 
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: corsHeaders(origin), body: "" };
+    return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
+  }
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: "Method Not Allowed" };
   }
 
-  if (event.httpMethod !== "POST") {
-    return json(405, origin, { ok: false, error: "Use POST" });
+  const HS_TOKEN = process.env.HUBSPOT_PRIVATE_APP_TOKEN || "";
+  if (!HS_TOKEN) {
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
+  }
+
+  const HS_HEADERS = { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" };
+
+  async function readText(res) { try { return await res.text(); } catch { return ""; } }
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    const text = await readText(res);
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    return { ok: res.ok, status: res.status, json, text };
+  }
+
+  function normalizeSpaces(str) {
+    return String(str || "").replace(/\s+/g, " ").trim();
+  }
+  function safeZip3(zip) {
+    const m = String(zip || "").match(/\b(\d{3})\d{2}(?:-\d{4})?\b/);
+    return m ? m[1] : "";
+  }
+  function normalizeOwnership(v) {
+    const s = normalizeSpaces(v);
+    const low = s.toLowerCase();
+    if (low.startsWith("own")) return "Owner";
+    if (low.startsWith("rent")) return "Renter";
+    return s;
+  }
+  function normalizeTimeline(v) {
+    const s = normalizeSpaces(v);
+    const low = s.toLowerCase();
+    if (low === "asap" || low.includes("a.s.a.p")) return "ASAP";
+    if (low.includes("1") && low.includes("week")) return "1 Week";
+    if ((low.includes("2") && low.includes("3") && low.includes("week")) || low.includes("2-3")) return "2 - 3 Weeks";
+    if (low.includes("30") && (low.includes("day") || low.includes("+"))) return "30 Days +";
+    return s;
+  }
+
+  function computeLeadPrice(payload, risk) {
+    const explicit = Number(payload.lead_price ?? payload.leadPrice ?? payload.price ?? NaN);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+
+    const timeLine = normalizeTimeline(payload.time_line);
+    const own = normalizeOwnership(payload.home_ownership);
+    const riskScore = Number(payload.hsc_risk_score ?? risk?.scoring?.riskScore ?? NaN);
+
+    const base = 85;
+    const bump = Number.isFinite(riskScore) ? Math.max(0, Math.min(100, riskScore)) * 1.2 : 40;
+
+    const timelineMult =
+      timeLine === "ASAP" ? 1.4 :
+      timeLine === "1 Week" ? 1.25 :
+      timeLine === "2 - 3 Weeks" ? 1.1 :
+      timeLine === "30 Days +" ? 0.9 : 1.0;
+
+    const ownerMult = own === "Owner" ? 1.15 : 1.0;
+
+    const raw = (base + bump) * timelineMult * ownerMult;
+    const clamped = Math.max(49, Math.min(399, raw));
+    return Math.round(clamped / 5) * 5;
+  }
+
+  async function hsPost(path, body) {
+    return fetchJson(`https://api.hubapi.com${path}`, {
+      method: "POST",
+      headers: HS_HEADERS,
+      body: JSON.stringify(body),
+    });
+  }
+  async function hsPatch(path, body) {
+    return fetchJson(`https://api.hubapi.com${path}`, {
+      method: "PATCH",
+      headers: HS_HEADERS,
+      body: JSON.stringify(body),
+    });
+  }
+  async function hsGet(path) {
+    return fetchJson(`https://api.hubapi.com${path}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${HS_TOKEN}` },
+    });
+  }
+
+  async function findContactIdByEmail(email) {
+    const r = await hsPost("/crm/v3/objects/contacts/search", {
+      filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
+      properties: ["email"],
+      limit: 1,
+    });
+    return r.ok && r.json?.results?.[0]?.id ? r.json.results[0].id : null;
+  }
+
+  async function upsertContact(email, properties) {
+    const id = await findContactIdByEmail(email);
+    if (!id) {
+      const created = await hsPost("/crm/v3/objects/contacts", { properties });
+      return created.ok ? created.json?.id : null;
+    }
+    await hsPatch(`/crm/v3/objects/contacts/${id}`, { properties });
+    return id;
+  }
+
+  async function findDealByLeadId(leadId) {
+    const r = await hsPost("/crm/v3/objects/deals/search", {
+      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
+      properties: ["lead_id","listing_status","lead_price"],
+      limit: 1,
+    });
+    return r.ok && r.json?.results?.[0] ? r.json.results[0] : null;
+  }
+
+  async function associateDealToContact(dealId, contactId) {
+    await hsPost("/crm/v3/associations/deals/contacts/batch/create", {
+      inputs: [{ from: { id: String(dealId) }, to: { id: String(contactId) }, type: "deal_to_contact" }],
+    });
+  }
+
+  async function getLineItemAssociations(dealId) {
+    const r = await hsGet(`/crm/v3/objects/deals/${dealId}/associations/line_items`);
+    const ids = (r.json?.results || []).map(x => x.id).filter(Boolean);
+    return ids;
+  }
+
+  async function createLineItemForDeal({ dealId, leadId, price, description, name }) {
+    // Create + associate in one call using associationTypeId 20. :contentReference[oaicite:8]{index=8}
+    const r = await hsPost("/crm/v3/objects/line_items", {
+      properties: {
+        name,
+        description,
+        quantity: 1,
+        price: price,
+        hs_sku: `LEAD-${leadId}`,
+      },
+      associations: [
+        {
+          to: { id: Number(dealId) },
+          types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 20 }],
+        },
+      ],
+    });
+    return r.ok ? r.json?.id : null;
   }
 
   try {
-    const token = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
-    if (!token) {
-      return json(500, origin, { ok: false, error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" });
-    }
+    const body = JSON.parse(event.body || "{}");
+    const payload = body.payload || {};
+    const risk = body.risk || null;
 
-    const body = event.body ? JSON.parse(event.body) : {};
-    const { payload, risk } = pickCanonical(body);
-
-    const canonical = normalizeCanonical(payload, risk);
-    const email = canonical.email;
-
+    const email = normalizeSpaces(payload.email);
     if (!email) {
-      return json(400, origin, { ok: false, error: "Missing email" });
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing payload.email" }) };
     }
 
-    const properties = mapToHubSpotProps(canonical);
+    const lead_id = normalizeSpaces(payload.lead_id) ||
+      (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-    // Upsert
-    const existingId = await findContactIdByEmail(email, token);
+    const home_ownership = normalizeOwnership(payload.home_ownership);
+    const time_line = normalizeTimeline(payload.time_line);
 
-    let result;
-    if (existingId) {
-      result = await hsFetch(`/crm/v3/objects/contacts/${existingId}`, token, {
-        method: "PATCH",
-        body: JSON.stringify({ properties }),
-      });
-    } else {
-      result = await hsFetch(`/crm/v3/objects/contacts`, token, {
-        method: "POST",
-        body: JSON.stringify({ properties }),
-      });
-    }
+    const city = normalizeSpaces(payload.city || "");
+    const stateCode = normalizeSpaces(payload.state_code || payload.state || "");
+    const zip = normalizeSpaces(payload.postal_code || payload.zip || "");
+    const zip3 = safeZip3(zip);
+    const redacted_location = [city, stateCode].filter(Boolean).join(", ") + (zip3 ? ` ${zip3}xx` : "");
 
-    if (!result.ok) {
-      // Most common cause: a mapped property internal name doesn't exist
-      return json(result.status || 400, origin, {
-        ok: false,
-        error: "HubSpot upsert failed",
-        detail: result.body,
-        hint: "Verify PROP_MAP internal property names exist in HubSpot (Settings → Properties).",
-      });
-    }
+    const lead_price = computeLeadPrice(payload, risk);
 
-    return json(200, origin, {
-      ok: true,
-      mode: existingId ? "updated" : "created",
+    // Contact upsert
+    const contactId = await upsertContact(email, {
+      firstname: payload.firstname || "",
+      lastname: payload.lastname || "",
       email,
-      syncedAt: toISODateTime(),
-      sentProperties: Object.keys(properties),
+      phone: payload.phone || "",
+      address: payload.street_address || payload.address || "",
+      city,
+      state: stateCode,
+      zip,
+      home_ownership,
+      time_line,
+      hsc_property_address: payload.hsc_property_address || payload.address || "",
+      hsc_risk_score: payload.hsc_risk_score ?? "",
+      hsc_devices: payload.hsc_devices || payload.deviceSummary || payload.selectedItems || "",
+      hsc_monthly: payload.hsc_monthly ?? payload.monthly ?? "",
+      hsc_upfront: payload.hsc_upfront ?? payload.upfront ?? "",
     });
-  } catch (e) {
-    return json(500, origin, { ok: false, error: "Server error", detail: String(e?.message || e) });
+
+    // Deal create/update (Qualified)
+    const dealname = `Security Lead — ${redacted_location || "Location"} — ${time_line || "—"} — ${home_ownership || "—"}`;
+    const pipeline = process.env.HUBSPOT_DEAL_PIPELINE_ID || "";
+    const stageQualified = process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "";
+
+    const dealProps = {
+      dealname,
+      ...(pipeline ? { pipeline } : {}),
+      ...(stageQualified ? { dealstage: stageQualified } : {}),
+      lead_id,
+      listing_status: "Qualified",
+      lead_price: String(lead_price),
+      redacted_location,
+      time_line,
+      home_ownership,
+    };
+
+    const existingDeal = await findDealByLeadId(lead_id);
+    let dealId = null;
+
+    if (!existingDeal?.id) {
+      const created = await hsPost("/crm/v3/objects/deals", { properties: dealProps });
+      dealId = created.ok ? created.json?.id : null;
+      if (dealId && contactId) await associateDealToContact(dealId, contactId);
+    } else {
+      dealId = existingDeal.id;
+      await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: dealProps });
+    }
+
+    // Line item (unique product per lead)
+    let lineItemId = null;
+    if (dealId) {
+      const existingLineItems = await getLineItemAssociations(dealId);
+      if (!existingLineItems.length) {
+        lineItemId = await createLineItemForDeal({
+          dealId,
+          leadId: lead_id,
+          price: lead_price,
+          name: `Exclusive Lead — ${redacted_location} — ${time_line} — ${home_ownership}`,
+          description: `Redacted listing: ${redacted_location} | Timeline: ${time_line} | Ownership: ${home_ownership}`,
+        });
+
+        // Optional: store line item id on deal if you created a property lead_line_item_id
+        if (lineItemId) {
+          await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: { lead_line_item_id: String(lineItemId) } })
+            .catch(() => {});
+        }
+      } else {
+        lineItemId = existingLineItems[0];
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ ok: true, lead_id, deal_id: dealId, line_item_id: lineItemId, lead_price }),
+    };
+  } catch (err) {
+    console.error("hubspot-sync error:", err);
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: err.message }) };
   }
-};
+}
