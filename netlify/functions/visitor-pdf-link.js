@@ -1,94 +1,57 @@
-// netlify/functions/visitor-pdf-link.js
-export async function handler(event) {
-  const allowedOrigins = [
-    "https://www.homesecurecalculator.com",
-    "https://homesecurecalculator.com",
-    "https://www.netcoreleads.com",
-    "https://netcoreleads.com",
-    "https://api.netcoreleads.com",
-    "https://hubspotgate.netlify.app",
-  ];
-
-  function corsHeaders(origin) {
-    const safeOrigin = origin || allowedOrigins[0];
-    const allowedOrigin = allowedOrigins.includes(safeOrigin) ? safeOrigin : allowedOrigins[0];
-    return {
-      "Access-Control-Allow-Origin": allowedOrigin,
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Vary": "Origin",
-      "Cache-Control": "no-store",
-    };
-  }
+exports.handler = async (event) => {
+  const cors = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    "Cache-Control": "no-store",
+  };
 
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
-  }
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: "Method Not Allowed" };
+    return { statusCode: 204, headers: cors, body: "" };
   }
 
-  const HS_TOKEN = process.env.HUBSPOT_PRIVATE_APP_TOKEN || "";
-  if (!HS_TOKEN) {
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
-  }
-
-  const hsAuthHeaders = { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" };
-
-  async function readText(res) { try { return await res.text(); } catch { return ""; } }
-  async function fetchJson(url, options = {}) {
-    const res = await fetch(url, options);
-    const text = await readText(res);
-    let json = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-    return { ok: res.ok, status: res.status, json, text };
+  if (event.httpMethod !== "GET") {
+    return {
+      statusCode: 405,
+      headers: { ...cors, Allow: "GET,OPTIONS" },
+      body: JSON.stringify({ error: "Method Not Allowed. Use GET." }),
+    };
   }
 
   try {
-    const body = JSON.parse(event.body || "{}");
-    const lead_id = String(body.lead_id || "").trim();
-    if (!lead_id) {
-      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing lead_id" }) };
+    const url = new URL(event.rawUrl);
+    const leadId = (url.searchParams.get("lead_id") || "").trim();
+    const email  = (url.searchParams.get("email") || "").trim();
+
+    // If you visit the function directly without params, return 400 (NOT 405)
+    if (!leadId && !email) {
+      return {
+        statusCode: 400,
+        headers: cors,
+        body: JSON.stringify({
+          error: "Missing lead_id or email",
+          example: "/.netlify/functions/visitor-pdf-link?lead_id=ABC123&email=test@example.com"
+        }),
+      };
     }
 
-    // Find deal by lead_id
-    const dealSearch = await fetchJson("https://api.hubapi.com/crm/v3/objects/deals/search", {
-      method: "POST",
-      headers: hsAuthHeaders,
-      body: JSON.stringify({
-        filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: lead_id }] }],
-        properties: ["lead_id", "deliverable_pdf_file_id"],
-        limit: 1,
-      }),
-    });
-
-    const deal = dealSearch.json?.results?.[0] || null;
-    if (!deal?.id) {
-      return { statusCode: 404, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Deal not found for lead_id" }) };
-    }
-
-    const pdfFileId = String(deal.properties?.deliverable_pdf_file_id || "").trim();
-    if (!pdfFileId) {
-      return { statusCode: 409, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "PDF not ready yet" }) };
-    }
-
-    // Create signed URL for PRIVATE file
-    const signed = await fetchJson(`https://api.hubapi.com/files/v3/files/${encodeURIComponent(pdfFileId)}/signed-url`, {
-      headers: { Authorization: `Bearer ${HS_TOKEN}` },
-    });
-
-    const url = String(signed.json?.url || "");
-    if (!signed.ok || !url) {
-      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: signed.text || "Failed to create signed URL" }) };
-    }
-
+    // TODO: Replace this stub with your real lookup:
+    // - query HubSpot Deal/Contact for hsc_pdf_url / hsc_csv_url
+    // For now, returning a clear placeholder prevents silent failures.
     return {
-      statusCode: 200,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ ok: true, pdf_url: url }),
+      statusCode: 404,
+      headers: cors,
+      body: JSON.stringify({
+        error: "No PDF URL found yet (lookup not implemented or not saved).",
+        lead_id: leadId || null,
+        email: email || null
+      }),
     };
-  } catch (err) {
-    console.error("visitor-pdf-link error:", err);
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: err.message }) };
+  } catch (e) {
+    return {
+      statusCode: 500,
+      headers: cors,
+      body: JSON.stringify({ error: "Server error", detail: String(e?.message || e) }),
+    };
   }
-}
+};
