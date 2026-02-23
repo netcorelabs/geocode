@@ -1,31 +1,28 @@
 // netlify/functions/upload-deliverables.js
 
-export async function handler(event) {
+export async function handler(event){
 
-const allowedOrigins = [
+// ---------- ALLOWED ORIGINS ----------
+
+const allowedOrigins=[
 
 "https://www.homesecurecalculator.com",
 "https://homesecurecalculator.com",
 "https://www.netcoreleads.com",
 "https://netcoreleads.com",
 "https://api.netcoreleads.com",
-"https://hubspotgate.netlify.app",
+"https://hubspotgate.netlify.app"
 
 ];
 
-
-// ---------- CORS ----------
-
-function corsHeaders(origin){
-
-const safeOrigin =
-allowedOrigins.includes(origin)
-? origin
-: allowedOrigins[0];
+function cors(origin){
 
 return{
 
-"Access-Control-Allow-Origin":safeOrigin,
+"Access-Control-Allow-Origin":
+allowedOrigins.includes(origin)
+? origin
+: allowedOrigins[0],
 
 "Access-Control-Allow-Headers":
 "Content-Type,x-upload-key",
@@ -39,7 +36,6 @@ return{
 
 }
 
-
 // ---------- OPTIONS ----------
 
 if(event.httpMethod==="OPTIONS"){
@@ -47,28 +43,19 @@ if(event.httpMethod==="OPTIONS"){
 return{
 
 statusCode:204,
-
-headers:corsHeaders(
-event.headers?.origin
-),
-
+headers:cors(event.headers?.origin),
 body:""
 
 };
 
 }
 
-
 if(event.httpMethod!=="POST"){
 
 return{
 
 statusCode:405,
-
-headers:corsHeaders(
-event.headers?.origin
-),
-
+headers:cors(event.headers?.origin),
 body:"Method Not Allowed"
 
 };
@@ -76,43 +63,32 @@ body:"Method Not Allowed"
 }
 
 
-// ---------- BASIC SECURITY ----------
+// ---------- SECURITY ----------
 
-const origin =
-event.headers?.origin || "";
+const origin=event.headers?.origin||"";
 
 if(!allowedOrigins.includes(origin)){
 
 return{
 
 statusCode:403,
-
-headers:corsHeaders(origin),
-
+headers:cors(origin),
 body:"Forbidden"
 
 };
 
 }
 
-
-// ---------- SECRET SIGNATURE ----------
-
-const signature =
-event.headers["x-upload-key"];
-
 if(
-signature !==
-process.env.UPLOAD_SECRET
+event.headers["x-upload-key"]
+!==process.env.UPLOAD_SECRET
 ){
 
 return{
 
 statusCode:403,
-
-headers:corsHeaders(origin),
-
-body:"Invalid signature"
+headers:cors(origin),
+body:"Invalid Signature"
 
 };
 
@@ -121,30 +97,27 @@ body:"Invalid signature"
 
 // ---------- RATE LIMIT ----------
 
-global.lastUploads =
-global.lastUploads || new Map();
+global.lastUploads=
+global.lastUploads||new Map();
 
-const ip =
+const ip=
 event.headers[
 "x-nf-client-connection-ip"
-] || "unknown";
+]||"unknown";
 
-const now = Date.now();
+const now=Date.now();
 
 if(global.lastUploads.has(ip)){
 
-const last =
-global.lastUploads.get(ip);
-
-if(now-last < 5000){
+if(now-
+global.lastUploads.get(ip)
+<4000){
 
 return{
 
 statusCode:429,
-
-headers:corsHeaders(origin),
-
-body:"Too many uploads"
+headers:cors(origin),
+body:"Too Fast"
 
 };
 
@@ -157,80 +130,96 @@ global.lastUploads.set(ip,now);
 
 // ---------- ENV ----------
 
-const HS_TOKEN =
-process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+const TOKEN=
+process.env
+.HUBSPOT_PRIVATE_APP_TOKEN;
 
-if(!HS_TOKEN){
+if(!TOKEN){
 
 return{
 
 statusCode:500,
-
-headers:corsHeaders(origin),
-
-body:"Missing HUBSPOT token"
+headers:cors(origin),
+body:"Missing Token"
 
 };
 
 }
 
-const folderPath =
+const folderPath=
 process.env
 .HUBSPOT_FILES_FOLDER_PATH
-|| "/lead_store_deliverables";
+||"/lead_store_deliverables";
+
+const HS_AUTH={
+
+Authorization:`Bearer ${TOKEN}`
+
+};
 
 
 // ---------- HELPERS ----------
 
-async function readText(res){
+async function text(res){
 
-try{
-
-return await res.text();
-
-}catch{
-
-return "";
+try{return await res.text();}
+catch{return"";}
 
 }
 
-}
+async function fetchJson(url,opt={}){
 
+const r=await fetch(url,opt);
 
-async function fetchJson(url,options={}){
+const t=await text(r);
 
-const res = await fetch(url,options);
-
-const text = await readText(res);
-
-let json=null;
+let j=null;
 
 try{
 
-json=text?JSON.parse(text):null;
+j=t?JSON.parse(t):null;
 
 }catch{}
 
 return{
 
-ok:res.ok,
-
-status:res.status,
-
-json,
-
-text
+ok:r.ok,
+json:j,
+text:t,
+status:r.status
 
 };
 
 }
 
 
-const HS_AUTH={
+// ---------- HUBSPOT ----------
 
-Authorization:`Bearer ${HS_TOKEN}`
+async function hsPost(path,body){
 
-};
+return fetchJson(
+
+`https://api.hubapi.com${path}`,
+
+{
+
+method:"POST",
+
+headers:{
+
+...HS_AUTH,
+"Content-Type":
+"application/json"
+
+},
+
+body:JSON.stringify(body)
+
+}
+
+);
+
+}
 
 
 async function hsPatch(path,body){
@@ -246,8 +235,8 @@ method:"PATCH",
 headers:{
 
 ...HS_AUTH,
-
-"Content-Type":"application/json"
+"Content-Type":
+"application/json"
 
 },
 
@@ -260,51 +249,130 @@ body:JSON.stringify(body)
 }
 
 
+// ---------- FIND DEAL ----------
+
+async function findDeal(lead_id){
+
+const r=
+await hsPost(
+
+"/crm/v3/objects/deals/search",
+
+{
+
+filterGroups:[{
+
+filters:[{
+
+propertyName:"lead_id",
+
+operator:"EQ",
+
+value:String(lead_id)
+
+}]
+
+}],
+
+limit:1
+
+}
+
+);
+
+return r.ok &&
+r.json?.results?.[0]?.id
+? r.json.results[0].id
+: null;
+
+}
+
+
+// ---------- CREATE DEAL ----------
+
+async function createDeal(body){
+
+const r=await hsPost(
+
+"/crm/v3/objects/deals",
+
+{
+
+properties:{
+
+dealname:
+body.deal_name,
+
+amount:
+body.deal_amount,
+
+pipeline:
+body.pipeline,
+
+dealstage:
+body.stage,
+
+closedate:
+body.close_date,
+
+dealtype:
+body.deal_type,
+
+lead_id:
+body.lead_id
+
+}
+
+}
+
+);
+
+if(!r.ok){
+
+throw new Error(
+
+"Deal create failed "
++r.text
+
+);
+
+}
+
+return r.json.id;
+
+}
+
+
 // ---------- FILE UPLOAD ----------
 
-async function uploadPrivateFile({
+async function uploadFile(
 
 buffer,
-
-filename,
-
+name,
 mime
 
-}){
+){
 
-const form=new FormData();
+const f=new FormData();
 
-form.append(
+f.append(
 
 "file",
 
-new Blob([buffer],{
-
-type:mime
-
-}),
-
-filename
+new Blob([buffer],
+{type:mime}),
+name
 
 );
 
-form.append(
+f.append("fileName",name);
 
-"fileName",
-
-filename
-
-);
-
-form.append(
-
+f.append(
 "folderPath",
-
 folderPath
-
 );
 
-form.append(
+f.append(
 
 "options",
 
@@ -316,48 +384,39 @@ access:"PRIVATE"
 
 );
 
-
-const res = await fetch(
+const r=await fetch(
 
 "https://api.hubapi.com/files/v3/files",
 
 {
 
 method:"POST",
-
 headers:HS_AUTH,
-
-body:form
+body:f
 
 }
 
 );
 
-const text=await readText(res);
+const t=await text(r);
 
-let json=null;
+let j=null;
 
 try{
 
-json=text?JSON.parse(text):null;
+j=t?JSON.parse(t):null;
 
 }catch{}
 
-if(!res.ok){
+if(!r.ok){
 
 throw new Error(
-
-`Upload Failed ${res.status} ${text}`
-
+"Upload failed "+t
 );
 
 }
 
-return{
-
-fileId:String(json?.id||"")
-
-};
+return String(j?.id||"");
 
 }
 
@@ -366,76 +425,45 @@ fileId:String(json?.id||"")
 
 try{
 
-const body =
+const body=
 JSON.parse(event.body||"{}");
 
-const dealId =
-String(body.deal_id||"")
-.trim();
-
-const lead_id =
+const lead_id=
 String(body.lead_id||"")
 .trim();
 
-const pdf_base64 =
-String(body.pdf_base64||"")
-.trim();
+if(!lead_id){
 
-const csv_text =
-String(body.csv_text||"")
-.trim();
-
-
-if(
-
-!dealId ||
-!lead_id ||
-!pdf_base64 ||
-!csv_text
-
-){
-
-return{
-
-statusCode:400,
-
-headers:corsHeaders(origin),
-
-body:"Missing data"
-
-};
+throw new Error(
+"Missing lead_id"
+);
 
 }
 
 
-// ---------- FILE SIZE PROTECTION ----------
+// ---------- FIND OR CREATE DEAL ----------
 
-if(pdf_base64.length>8000000){
+let dealId=
+await findDeal(lead_id);
 
-throw new Error(
+if(!dealId){
 
-"PDF too large"
-
-);
+dealId=
+await createDeal(body);
 
 }
 
 
 // ---------- DUPLICATE CHECK ----------
 
-const existing =
+const existing=
 await fetchJson(
 
 `https://api.hubapi.com/crm/v3/objects/deals/${dealId}?properties=deliverable_pdf_file_id`,
 
-{
-
-headers:HS_AUTH
-
-}
+{headers:HS_AUTH}
 
 );
-
 
 if(
 
@@ -447,68 +475,62 @@ existing?.json?.properties
 return{
 
 statusCode:409,
-
-headers:corsHeaders(origin),
-
-body:"Deliverables exist"
+headers:cors(origin),
+body:"Already Uploaded"
 
 };
 
 }
 
 
-// ---------- CONVERT FILES ----------
+// ---------- FILES ----------
 
-const pdfBuffer =
+const pdfBuffer=
 Buffer.from(
-
-pdf_base64,
-
+body.pdf_base64,
 "base64"
-
 );
 
-const csvBuffer =
+const csvBuffer=
 Buffer.from(
-
-csv_text,
-
+body.csv_text,
 "utf8"
-
 );
 
 
-const pdfName =
-`lead-${lead_id}.pdf`;
+// ---------- SIZE LIMIT ----------
 
-const csvName =
-`lead-${lead_id}.csv`;
+if(pdfBuffer.length>
+8_000_000){
 
+throw new Error(
+"PDF too large"
+);
 
-// ---------- UPLOAD ----------
-
-const pdfUp =
-await uploadPrivateFile({
-
-buffer:pdfBuffer,
-
-filename:pdfName,
-
-mime:"application/pdf"
-
-});
+}
 
 
-const csvUp =
-await uploadPrivateFile({
+const pdfId=
+await uploadFile(
 
-buffer:csvBuffer,
+pdfBuffer,
 
-filename:csvName,
+`lead-${lead_id}.pdf`,
 
-mime:"text/csv"
+"application/pdf"
 
-});
+);
+
+const csvId=
+await uploadFile(
+
+csvBuffer,
+
+`lead-${lead_id}.csv`,
+
+"text/csv"
+
+);
 
 
 // ---------- PATCH DEAL ----------
@@ -522,10 +544,10 @@ await hsPatch(
 properties:{
 
 deliverable_pdf_file_id:
-pdfUp.fileId,
+pdfId,
 
 deliverable_csv_file_id:
-csvUp.fileId,
+csvId,
 
 deliverables_uploaded:true
 
@@ -536,7 +558,7 @@ deliverables_uploaded:true
 );
 
 
-// ---------- OPTIONAL AI TRIGGER ----------
+// ---------- AI WEBHOOK ----------
 
 if(process.env.AI_WEBHOOK){
 
@@ -549,16 +571,13 @@ process.env.AI_WEBHOOK,
 method:"POST",
 
 headers:{
-
 "Content-Type":
 "application/json"
-
 },
 
 body:JSON.stringify({
 
 dealId,
-
 lead_id
 
 })
@@ -576,45 +595,34 @@ return{
 
 statusCode:200,
 
-headers:corsHeaders(origin),
+headers:cors(origin),
 
 body:JSON.stringify({
 
 ok:true,
-
 deal_id:dealId,
-
-pdf_file_id:
-pdfUp.fileId,
-
-csv_file_id:
-csvUp.fileId
+pdf_file_id:pdfId,
+csv_file_id:csvId
 
 })
 
 };
 
-}catch(err){
+}catch(e){
 
-console.error(
-
-"upload-deliverables error",
-
-err
-
-);
+console.error(e);
 
 return{
 
 statusCode:500,
 
-headers:corsHeaders(
+headers:cors(
 event.headers?.origin
 ),
 
 body:JSON.stringify({
 
-error:err.message
+error:e.message
 
 })
 
