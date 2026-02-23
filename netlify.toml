@@ -1,6 +1,10 @@
 [build]
   publish = "."
-  
- functions = "/.netlify/functions"
-[functions]
-  node_bundler = "esbuild"
+  functions = "netlify/functions"
+
+# ✅ Force consistent function routing AND fix CORS preflight
+[[redirects]]
+  from = "/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+  force = true
