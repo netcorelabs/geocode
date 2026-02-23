@@ -49,13 +49,12 @@ export async function handler(event) {
     return { ok: res.ok, status: res.status, json, text };
   }
 
-  function normalizeSpaces(str) {
-    return String(str || "").replace(/\s+/g, " ").trim();
-  }
+  function normalizeSpaces(str) { return String(str || "").replace(/\s+/g, " ").trim(); }
   function safeZip3(zip) {
     const m = String(zip || "").match(/\b(\d{3})\d{2}(?:-\d{4})?\b/);
     return m ? m[1] : "";
   }
+
   function normalizeOwnership(v) {
     const s = normalizeSpaces(v);
     const low = s.toLowerCase();
@@ -63,6 +62,7 @@ export async function handler(event) {
     if (low.startsWith("rent")) return "Renter";
     return s;
   }
+
   function normalizeTimeline(v) {
     const s = normalizeSpaces(v);
     const low = s.toLowerCase();
@@ -140,26 +140,19 @@ export async function handler(event) {
   async function findDealByLeadId(leadId) {
     const r = await hsPost("/crm/v3/objects/deals/search", {
       filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
-      properties: ["lead_id", "listing_status", "lead_price"],
+      properties: ["lead_id", "listing_status", "lead_price", "redacted_location", "time_line", "home_ownership"],
       limit: 1,
     });
     return r.ok && r.json?.results?.[0] ? r.json.results[0] : null;
   }
 
-  async function associateDealToContact(dealId, contactId) {
-    await hsPost("/crm/v3/associations/deals/contacts/batch/create", {
-      inputs: [{ from: { id: String(dealId) }, to: { id: String(contactId) }, type: "deal_to_contact" }],
-    });
-  }
-
   async function getLineItemAssociations(dealId) {
     const r = await hsGet(`/crm/v3/objects/deals/${dealId}/associations/line_items`);
-    const ids = (r.json?.results || []).map((x) => x.id).filter(Boolean);
-    return ids;
+    return (r.json?.results || []).map((x) => x.id).filter(Boolean);
   }
 
   async function createLineItemForDeal({ dealId, leadId, price, description, name }) {
-    // Create + associate in one call using associationTypeId 20 (line item -> deal)
+    // associationTypeId 20 = line item -> deal
     const r = await hsPost("/crm/v3/objects/line_items", {
       properties: {
         name,
@@ -207,8 +200,8 @@ export async function handler(event) {
 
     const lead_price = computeLeadPrice(payload, risk);
 
-    // Contact upsert
-    const contactId = await upsertContact(email, {
+    // ✅ CONTACT UPSERT (PII stays here) — NOT associated to Deal
+    await upsertContact(email, {
       firstname: payload.firstname || "",
       lastname: payload.lastname || "",
       email,
@@ -226,15 +219,15 @@ export async function handler(event) {
       hsc_upfront: payload.hsc_upfront ?? payload.upfront ?? "",
     });
 
-    // Deal create/update (Qualified)
+    // ✅ DEAL (NO PII) — only redacted listing fields + lead_id + price
     const dealname = `Security Lead — ${redacted_location || "Location"} — ${time_line || "—"} — ${home_ownership || "—"}`;
-    const pipeline = process.env.HUBSPOT_DEAL_PIPELINE_ID || "";
-    const stageQualified = process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "";
+    const pipeline = process.env.HUBSPOT_DEAL_PIPELINE_ID || "default";
+    const stageQualified = process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "appointmentscheduled";
 
     const dealProps = {
       dealname,
-      ...(pipeline ? { pipeline } : {}),
-      ...(stageQualified ? { dealstage: stageQualified } : {}),
+      pipeline,
+      dealstage: stageQualified,
       lead_id,
       listing_status: "Qualified",
       lead_price: String(lead_price),
@@ -249,13 +242,12 @@ export async function handler(event) {
     if (!existingDeal?.id) {
       const created = await hsPost("/crm/v3/objects/deals", { properties: dealProps });
       dealId = created.ok ? created.json?.id : null;
-      if (dealId && contactId) await associateDealToContact(dealId, contactId);
     } else {
       dealId = existingDeal.id;
       await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: dealProps });
     }
 
-    // Line item (unique product per lead)
+    // ✅ LINE ITEM (unique product) — attached to Deal (not Contact)
     let lineItemId = null;
     if (dealId) {
       const existingLineItems = await getLineItemAssociations(dealId);
@@ -267,12 +259,6 @@ export async function handler(event) {
           name: `Exclusive Lead — ${redacted_location} — ${time_line} — ${home_ownership}`,
           description: `Redacted listing: ${redacted_location} | Timeline: ${time_line} | Ownership: ${home_ownership}`,
         });
-
-        // Optional: store line item id on deal if you created a property lead_line_item_id
-        if (lineItemId) {
-          await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: { lead_line_item_id: String(lineItemId) } })
-            .catch(() => {});
-        }
       } else {
         lineItemId = existingLineItems[0];
       }
