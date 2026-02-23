@@ -12,8 +12,7 @@ export async function handler(event) {
   function corsHeaders(originRaw) {
     const origin = (originRaw || "").trim();
 
-    // If no Origin header (direct browser hit, curl, etc), allow all.
-    // If Origin exists, only allow if it's in your allowlist.
+    // If no Origin header (direct browser hit), allow all
     const allowOrigin = origin
       ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0])
       : "*";
@@ -30,12 +29,10 @@ export async function handler(event) {
 
   const originHeader = event.headers?.origin || event.headers?.Origin || "";
 
-  // Preflight
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders(originHeader), body: "" };
   }
 
-  // Only allow GET or POST
   if (event.httpMethod !== "GET" && event.httpMethod !== "POST") {
     return {
       statusCode: 405,
@@ -53,15 +50,9 @@ export async function handler(event) {
     };
   }
 
-  const hsAuthHeaders = {
-    Authorization: `Bearer ${HS_TOKEN}`,
-    "Content-Type": "application/json",
-  };
+  const hsAuthHeaders = { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" };
 
-  async function readText(res) {
-    try { return await res.text(); } catch { return ""; }
-  }
-
+  async function readText(res) { try { return await res.text(); } catch { return ""; } }
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     const text = await readText(res);
@@ -74,7 +65,6 @@ export async function handler(event) {
     // GET: /visitor-pdf-link?lead_id=XYZ
     // POST: { "lead_id": "XYZ" }
     let lead_id = "";
-
     if (event.httpMethod === "GET") {
       lead_id = String(event.queryStringParameters?.lead_id || "").trim();
     } else {
@@ -86,11 +76,7 @@ export async function handler(event) {
       return {
         statusCode: 400,
         headers: corsHeaders(originHeader),
-        body: JSON.stringify({
-          error: "Missing lead_id",
-          example_get: "/.netlify/functions/visitor-pdf-link?lead_id=YOUR_LEAD_ID",
-          example_post: { lead_id: "YOUR_LEAD_ID" },
-        }),
+        body: JSON.stringify({ error: "Missing lead_id" }),
       };
     }
 
@@ -104,17 +90,6 @@ export async function handler(event) {
         limit: 1,
       }),
     });
-
-    if (!dealSearch.ok) {
-      return {
-        statusCode: dealSearch.status || 500,
-        headers: corsHeaders(originHeader),
-        body: JSON.stringify({
-          error: "Deal search failed",
-          detail: dealSearch.text || "",
-        }),
-      };
-    }
 
     const deal = dealSearch.json?.results?.[0] || null;
     if (!deal?.id) {
@@ -134,7 +109,7 @@ export async function handler(event) {
       };
     }
 
-    // Create signed URL for PRIVATE file
+    // Signed URL for PRIVATE file
     const signed = await fetchJson(
       `https://api.hubapi.com/files/v3/files/${encodeURIComponent(pdfFileId)}/signed-url`,
       { method: "GET", headers: { Authorization: `Bearer ${HS_TOKEN}` } }
@@ -145,7 +120,7 @@ export async function handler(event) {
       return {
         statusCode: 500,
         headers: corsHeaders(originHeader),
-        body: JSON.stringify({ error: signed.text || "Failed to create signed URL", file_id: pdfFileId }),
+        body: JSON.stringify({ error: signed.text || "Failed to create signed URL" }),
       };
     }
 
