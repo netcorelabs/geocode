@@ -2,19 +2,108 @@
 import crypto from "node:crypto";
 
 export async function handler(event) {
+  // HubSpot expects 2xx quickly; we still do idempotent processing.
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+      },
+      body: "",
+    };
+  }
+  if (event.httpMethod !== "POST") return { statusCode: 405, body: "Method Not Allowed" };
+
   const HS_TOKEN = process.env.HUBSPOT_PRIVATE_APP_TOKEN || "";
-  const HS_CLIENT_SECRET = process.env.HUBSPOT_APP_CLIENT_SECRET || "";
+  const HS_CLIENT_SECRET = process.env.HUBSPOT_APP_CLIENT_SECRET || ""; // required for signature validation
+  const SOLD_STAGE = process.env.HUBSPOT_DEAL_STAGE_PAID || ""; // optional
   const API_BASE = (process.env.LEAD_STORE_API_URL || "https://api.netcoreleads.com").replace(/\/$/, "");
 
+  // Optional email sending (no Zapier)
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "";
 
   if (!HS_TOKEN) return { statusCode: 500, body: "Missing HUBSPOT_PRIVATE_APP_TOKEN" };
+  if (!HS_CLIENT_SECRET) return { statusCode: 500, body: "Missing HUBSPOT_APP_CLIENT_SECRET" };
 
-  // --- Helpers ---
-  async function readText(res) {
-    try { return await res.text(); } catch { return ""; }
+  // ---------------------------
+  // Header helpers
+  // ---------------------------
+  function getHeader(name) {
+    const h = event.headers || {};
+    const lower = name.toLowerCase();
+    for (const k of Object.keys(h)) {
+      if (String(k).toLowerCase() === lower) return h[k];
+    }
+    return "";
   }
+
+  function timingSafeEqual(a, b) {
+    const ba = Buffer.from(String(a || ""), "utf8");
+    const bb = Buffer.from(String(b || ""), "utf8");
+    if (ba.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ba, bb);
+  }
+
+  // HubSpot v3 signature validation:
+  // expected = base64(HMAC_SHA256(clientSecret, method + uri + body + timestamp))
+  // reject if timestamp older than 5 minutes.
+  function decodeHubSpotUri(uri) {
+    // HubSpot docs: decode specific URL-encoded chars; we apply a safe mapping.
+    const map = [
+      ["%3A", ":"], ["%2F", "/"], ["%3F", "?"], ["%40", "@"], ["%21", "!"], ["%24", "$"],
+      ["%27", "'"], ["%28", "("], ["%29", ")"], ["%2A", "*"], ["%2C", ","], ["%3B", ";"],
+    ];
+    let out = String(uri || "");
+    for (const [enc, dec] of map) {
+      out = out.replace(new RegExp(enc, "gi"), dec);
+    }
+    return out;
+  }
+
+  function computeV3Signature(clientSecret, method, uri, rawBody, timestamp) {
+    const source = `${method}${uri}${rawBody}${timestamp}`;
+    const hmac = crypto.createHmac("sha256", clientSecret).update(source, "utf8").digest();
+    return hmac.toString("base64");
+  }
+
+  function validateHubSpotSignatureV3() {
+    const sig = getHeader("X-HubSpot-Signature-V3");
+    const ts = getHeader("X-HubSpot-Request-Timestamp");
+
+    if (!sig || !ts) return false;
+
+    const tsNum = Number(ts);
+    if (!Number.isFinite(tsNum)) return false;
+
+    // reject if older than 5 minutes
+    const ageMs = Math.abs(Date.now() - tsNum);
+    if (ageMs > 5 * 60 * 1000) return false;
+
+    const method = String(event.httpMethod || "POST").toUpperCase();
+    const host = getHeader("host");
+    const proto = getHeader("x-forwarded-proto") || "https";
+    const path = event.path || "/.netlify/functions/hubspot-payment-webhook";
+
+    // IMPORTANT: HubSpot signs the exact target URL you configured (protocol + host + path).
+    const uri = decodeHubSpotUri(`${proto}://${host}${path}`);
+
+    const rawBody = event.body || "";
+    const expected = computeV3Signature(HS_CLIENT_SECRET, method, uri, rawBody, ts);
+
+    return timingSafeEqual(expected, sig);
+  }
+
+  if (!validateHubSpotSignatureV3()) {
+    return { statusCode: 401, body: "Invalid HubSpot signature" };
+  }
+
+  // ---------------------------
+  // HTTP helpers
+  // ---------------------------
+  async function readText(res) { try { return await res.text(); } catch { return ""; } }
 
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
@@ -24,117 +113,97 @@ export async function handler(event) {
     return { ok: res.ok, status: res.status, json, text };
   }
 
-  // --- HubSpot signature validation (supports v1 + v3) ---
-  // v1: sha256(clientSecret + body).hexdigest() :contentReference[oaicite:8]{index=8}
-  // v3: base64(HMAC_SHA256(clientSecret, method+uri+body+timestamp)) :contentReference[oaicite:9]{index=9}
-  function timingSafeEqual(a, b) {
-    const ba = Buffer.from(a || "", "utf8");
-    const bb = Buffer.from(b || "", "utf8");
-    if (ba.length !== bb.length) return false;
-    return crypto.timingSafeEqual(ba, bb);
-  }
+  const hsAuth = { Authorization: `Bearer ${HS_TOKEN}` };
 
-  function computeV1Signature(clientSecret, rawBody) {
-    return crypto.createHash("sha256").update(`${clientSecret}${rawBody}`, "utf8").digest("hex");
-  }
-
-  function computeV3Signature(clientSecret, method, uri, rawBody, timestamp) {
-    const source = `${method}${uri}${rawBody}${timestamp}`;
-    const hmac = crypto.createHmac("sha256", clientSecret).update(source, "utf8").digest();
-    return hmac.toString("base64");
-  }
-
-  function validateHubSpotSignature() {
-    if (!HS_CLIENT_SECRET) {
-      // If you don't set it, we can't verify authenticity
-      return false;
-    }
-
-    const rawBody = event.body || "";
-    const method = (event.httpMethod || "POST").toUpperCase();
-
-    // Netlify gives host + path; webhooks should have no query params
-    const host = event.headers?.host || event.headers?.Host || "";
-    const path = event.path || "/.netlify/functions/hubspot-payment-webhook";
-    const uri = `https://${host}${path}`;
-
-    const sigV3 = event.headers?.["x-hubspot-signature-v3"] || event.headers?.["X-HubSpot-Signature-V3"];
-    const ts = event.headers?.["x-hubspot-request-timestamp"] || event.headers?.["X-HubSpot-Request-Timestamp"];
-
-    if (sigV3 && ts) {
-      const expected = computeV3Signature(HS_CLIENT_SECRET, method, uri, rawBody, ts);
-      return timingSafeEqual(expected, sigV3);
-    }
-
-    const sig = event.headers?.["x-hubspot-signature"] || event.headers?.["X-HubSpot-Signature"];
-    const ver = (event.headers?.["x-hubspot-signature-version"] || event.headers?.["X-HubSpot-Signature-Version"] || "v1").toLowerCase();
-
-    if (!sig) return false;
-
-    if (ver === "v1") {
-      const expected = computeV1Signature(HS_CLIENT_SECRET, rawBody);
-      return timingSafeEqual(expected, sig);
-    }
-
-    // If HubSpot sends v2 here, you can add v2 logic later; v1/v3 covers most webhook cases.
-    return false;
-  }
-
-  if (!validateHubSpotSignature()) {
-    // HubSpot recommends validating signature headers :contentReference[oaicite:10]{index=10}
-    return { statusCode: 401, body: "Invalid HubSpot signature" };
-  }
-
-  // --- Parse webhook payload ---
-  let payload;
-  try { payload = JSON.parse(event.body || "[]"); } catch { payload = []; }
-  const events = Array.isArray(payload) ? payload : (payload?.events || []);
-
-  // HubSpot API auth
-  const hsAuthHeaders = { Authorization: `Bearer ${HS_TOKEN}` };
-
-  async function getPayment(paymentId) {
-    // Commerce payments object: /crm/v3/objects/commerce_payments/{id} :contentReference[oaicite:11]{index=11}
-    const props = ["hs_latest_status", "hs_customer_email", "hs_initial_amount", "hs_currency_code"].join(",");
-    return fetchJson(`https://api.hubapi.com/crm/v3/objects/commerce_payments/${paymentId}?properties=${encodeURIComponent(props)}`, {
-      headers: hsAuthHeaders,
-    });
-  }
-
-  async function getAssociatedDealsForPayment(paymentId) {
-    // Standard associations read endpoint works for CRM objects, including commerce payments (generic webhooks supports it) :contentReference[oaicite:12]{index=12}
-    const r = await fetchJson(`https://api.hubapi.com/crm/v3/objects/commerce_payments/${paymentId}/associations/deals`, {
-      headers: hsAuthHeaders,
-    });
-    const ids = (r.json?.results || []).map(x => x.id).filter(Boolean);
-    return ids;
-  }
-
-  async function getDeal(dealId) {
+  // ---------------------------
+  // Deal-only delivery issue logic
+  // ---------------------------
+  async function issueDeliveryForDeal(dealId) {
     const props = [
       "listing_status",
       "delivery_token",
       "delivery_expires_at",
       "deliverable_pdf_file_id",
       "deliverable_csv_file_id",
-      "buy_now_url",
-      "lead_id",
     ].join(",");
-    return fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${dealId}?properties=${encodeURIComponent(props)}`, {
-      headers: hsAuthHeaders,
-    });
-  }
 
-  async function patchDeal(dealId, properties) {
-    return fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${dealId}`, {
+    const dealRes = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=${encodeURIComponent(props)}`,
+      { headers: hsAuth }
+    );
+    if (!dealRes.ok) return { ok: false, error: `Deal fetch failed: ${dealRes.status}` };
+
+    const p = dealRes.json?.properties || {};
+    const listingStatus = String(p.listing_status || "");
+    const existingToken = String(p.delivery_token || "");
+    const existingExp = Number(p.delivery_expires_at || "0");
+
+    const pdfFileId = String(p.deliverable_pdf_file_id || "").trim();
+    const csvFileId = String(p.deliverable_csv_file_id || "").trim();
+
+    // Must exist before sale is finalized
+    if (!pdfFileId || !csvFileId) {
+      return { ok: false, error: "Deliverables not ready" };
+    }
+
+    // Idempotent: if already sold + token valid, reuse
+    if ((listingStatus === "Sold" || listingStatus === "Delivered") && existingToken && (!existingExp || Date.now() < existingExp)) {
+      return {
+        ok: true,
+        deal_id: dealId,
+        delivery_token: existingToken,
+        delivery_expires_at: existingExp || null,
+        deliverables_url: `${API_BASE}/.netlify/functions/deliverables?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(existingToken)}`,
+        pdf_download_url: `${API_BASE}/.netlify/functions/download-pdf?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(existingToken)}`,
+        csv_download_url: `${API_BASE}/.netlify/functions/download-csv?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(existingToken)}`,
+        reused: true,
+      };
+    }
+
+    // If already sold but no token, manual review (avoid double-issuing)
+    if (listingStatus === "Sold" || listingStatus === "Delivered") {
+      return { ok: false, error: "Already sold (no token). Manual review." };
+    }
+
+    const token = crypto.randomUUID();
+    const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+
+    const patch = {
+      properties: {
+        listing_status: "Sold",
+        delivery_token: token,
+        delivery_expires_at: String(expiresAt),
+        ...(SOLD_STAGE ? { dealstage: SOLD_STAGE } : {}),
+      },
+    };
+
+    const upd = await fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, {
       method: "PATCH",
-      headers: { ...hsAuthHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ properties }),
+      headers: { ...hsAuth, "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
     });
+
+    if (!upd.ok) return { ok: false, error: upd.text || "Failed to update deal" };
+
+    return {
+      ok: true,
+      deal_id: dealId,
+      delivery_token: token,
+      delivery_expires_at: expiresAt,
+      deliverables_url: `${API_BASE}/.netlify/functions/deliverables?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(token)}`,
+      pdf_download_url: `${API_BASE}/.netlify/functions/download-pdf?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(token)}`,
+      csv_download_url: `${API_BASE}/.netlify/functions/download-csv?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(token)}`,
+      reused: false,
+    };
   }
 
+  // ---------------------------
+  // Optional SendGrid email
+  // ---------------------------
   async function sendEmail(toEmail, subject, text) {
-    if (!SENDGRID_API_KEY || !SENDGRID_FROM_EMAIL || !toEmail) return { ok: false, reason: "SendGrid not configured" };
+    if (!SENDGRID_API_KEY || !SENDGRID_FROM_EMAIL || !toEmail) {
+      return { ok: false, skipped: true };
+    }
     return fetchJson("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
@@ -150,81 +219,101 @@ export async function handler(event) {
     });
   }
 
-  // --- Process events ---
+  // ---------------------------
+  // Parse webhook payload
+  // ---------------------------
+  let payload;
+  try { payload = JSON.parse(event.body || "[]"); } catch { payload = []; }
+
+  // HubSpot webhook payloads are typically arrays of events
+  const events = Array.isArray(payload) ? payload : (payload?.events || []);
   const processed = [];
 
+  // Process each event
   for (const e of events) {
-    const paymentId = String(e?.objectId || "").trim();
-    if (!paymentId) continue;
+    const objectId = String(e?.objectId || e?.object_id || "").trim();
+    const objType = String(e?.subscriptionType || e?.objectType || "").toLowerCase();
 
-    const payRes = await getPayment(paymentId);
-    if (!payRes.ok) continue;
+    // Generic webhooks should send commerce_payments events; we still guard.
+    if (!objectId) continue;
 
-    const p = payRes.json?.properties || {};
-    const status = String(p.hs_latest_status || "");
-    const buyerEmail = String(p.hs_customer_email || "");
+    // Fetch payment to confirm succeeded
+    const payProps = ["hs_latest_status", "hs_customer_email", "hs_initial_amount", "hs_currency_code"].join(",");
+    const payRes = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/commerce_payments/${encodeURIComponent(objectId)}?properties=${encodeURIComponent(payProps)}`,
+      { headers: hsAuth }
+    );
 
-    // We only deliver on succeeded :contentReference[oaicite:13]{index=13}
-    if (status !== "succeeded") continue;
+    if (!payRes.ok) {
+      processed.push({ payment_id: objectId, ok: false, error: "Payment fetch failed" });
+      continue;
+    }
 
-    const dealIds = await getAssociatedDealsForPayment(paymentId);
+    const pay = payRes.json?.properties || {};
+    const status = String(pay.hs_latest_status || "");
+    const buyerEmail = String(pay.hs_customer_email || "");
+
+    // Only act when succeeded :contentReference[oaicite:2]{index=2}
+    if (status !== "succeeded") {
+      processed.push({ payment_id: objectId, ok: true, skipped: true, reason: `status=${status}` });
+      continue;
+    }
+
+    // Find associated deal(s)
+    const assocRes = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/commerce_payments/${encodeURIComponent(objectId)}/associations/deals`,
+      { headers: hsAuth }
+    );
+
+    const dealIds = (assocRes.json?.results || []).map(x => String(x.id)).filter(Boolean);
     if (!dealIds.length) {
-      processed.push({ paymentId, status, buyerEmail, note: "No associated deal found (ensure payment link was created from the deal)." });
+      processed.push({
+        payment_id: objectId,
+        ok: false,
+        error: "No associated deal found. Create the payment link from the Deal so the payment associates to it.",
+      });
       continue;
     }
 
     for (const dealId of dealIds) {
-      const dealRes = await getDeal(dealId);
-      if (!dealRes.ok) continue;
+      const issued = await issueDeliveryForDeal(dealId);
 
-      const d = dealRes.json?.properties || {};
-      const listingStatus = String(d.listing_status || "");
-
-      // Idempotent: if already Sold/Delivered, skip
-      if (listingStatus === "Sold" || listingStatus === "Delivered") {
-        processed.push({ paymentId, dealId, status, listingStatus, skipped: true });
+      if (!issued.ok) {
+        processed.push({ payment_id: objectId, deal_id: dealId, ok: false, error: issued.error });
         continue;
       }
 
-      // Stamp delivery token + expiry (24h)
-      const token = crypto.randomUUID();
-      const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
-
-      await patchDeal(dealId, {
-        listing_status: "Sold",
-        delivery_token: token,
-        delivery_expires_at: String(expiresAt),
-      });
-
-      const deliverablesUrl = `${API_BASE}/.netlify/functions/deliverables?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(token)}`;
-      const pdfUrl = `${API_BASE}/.netlify/functions/download-pdf?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(token)}`;
-      const csvUrl = `${API_BASE}/.netlify/functions/download-csv?deal_id=${encodeURIComponent(dealId)}&token=${encodeURIComponent(token)}`;
-
+      // Email vendor/buyer the links (optional but recommended)
       const emailText =
         `Thanks for your purchase.\n\n` +
-        `Lead deliverables (expires in 24 hours):\n` +
-        `PDF: ${pdfUrl}\n` +
-        `CSV: ${csvUrl}\n` +
-        `All-in-one page: ${deliverablesUrl}\n`;
+        `Your lead deliverables (expires in 24 hours):\n` +
+        `PDF: ${issued.pdf_download_url}\n` +
+        `CSV: ${issued.csv_download_url}\n` +
+        `All-in-one: ${issued.deliverables_url}\n`;
 
-      const emailRes = await sendEmail(
-        buyerEmail,
-        "Your purchased lead deliverables",
-        emailText
-      );
+      const emailRes = await sendEmail(buyerEmail, "Your NetCore Leads delivery links", emailText);
 
       processed.push({
-        paymentId,
-        dealId,
-        buyerEmail,
-        delivered: true,
+        payment_id: objectId,
+        deal_id: dealId,
+        ok: true,
+        sold: true,
+        reused: Boolean(issued.reused),
+        buyer_email: buyerEmail || null,
         emailed: Boolean(emailRes?.ok),
+        email_skipped: Boolean(emailRes?.skipped),
+        links: {
+          pdf: issued.pdf_download_url,
+          csv: issued.csv_download_url,
+          all: issued.deliverables_url,
+        },
       });
     }
   }
 
   return {
     statusCode: 200,
-    body: JSON.stringify({ ok: true, processedCount: processed.length, processed }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ok: true, processed }),
   };
 }
