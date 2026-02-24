@@ -61,21 +61,20 @@ export async function handler(event) {
   async function findDealByLeadId(leadId) {
     const r = await hsPost("/crm/v3/objects/deals/search", {
       filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
-      properties: ["lead_id", "deliverable_pdf_file_id"],
+      properties: ["lead_id", "deliverable_pdf_file_id", "deliverable_csv_file_id"],
       limit: 1,
     });
     return r.ok && r.json?.results?.[0] ? r.json.results[0] : null;
   }
 
   async function readDealById(dealId) {
-    // Request only properties we need
-    const r = await hsGet(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=lead_id,deliverable_pdf_file_id`);
+    const props = "lead_id,deliverable_pdf_file_id,deliverable_csv_file_id";
+    const r = await hsGet(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=${encodeURIComponent(props)}`);
     if (!r.ok || !r.json?.id) return null;
     return r.json;
   }
 
   async function createSignedUrl(fileId) {
-    // HubSpot Files v3 signed URL endpoint (PRIVATE file)
     const r = await fetchJson(
       `https://api.hubapi.com/files/v3/files/${encodeURIComponent(fileId)}/signed-url`,
       { method: "GET", headers: hsAuth }
@@ -86,7 +85,6 @@ export async function handler(event) {
   }
 
   function readInputs() {
-    // Support POST JSON and GET query string (for quick testing)
     let lead_id = "";
     let deal_id = "";
 
@@ -97,7 +95,6 @@ export async function handler(event) {
       return { lead_id, deal_id };
     }
 
-    // POST
     try {
       const body = JSON.parse(event.body || "{}");
       lead_id = String(body.lead_id || "").trim();
@@ -108,21 +105,13 @@ export async function handler(event) {
 
   try {
     if (event.httpMethod !== "POST" && event.httpMethod !== "GET") {
-      return {
-        statusCode: 405,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Method Not Allowed" }),
-      };
+      return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
     }
 
     const { lead_id, deal_id } = readInputs();
 
     if (!deal_id && !lead_id) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing deal_id or lead_id" }),
-      };
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing deal_id or lead_id" }) };
     }
 
     // Prefer deal_id (no indexing delay)
@@ -130,28 +119,20 @@ export async function handler(event) {
     if (deal_id) {
       deal = await readDealById(deal_id);
       if (!deal) {
-        return {
-          statusCode: 404,
-          headers: corsHeaders(event.headers?.origin),
-          body: JSON.stringify({ error: "Deal not found for deal_id", deal_id }),
-        };
+        return { statusCode: 404, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Deal not found for deal_id", deal_id }) };
       }
     } else {
       deal = await findDealByLeadId(lead_id);
       if (!deal?.id) {
-        return {
-          statusCode: 404,
-          headers: corsHeaders(event.headers?.origin),
-          body: JSON.stringify({ error: "Deal not found for lead_id", lead_id }),
-        };
+        return { statusCode: 404, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Deal not found for lead_id", lead_id }) };
       }
     }
 
     const resolvedDealId = String(deal.id || deal_id || "").trim();
     const pdfFileId = String(deal.properties?.deliverable_pdf_file_id || "").trim();
+    const csvFileId = String(deal.properties?.deliverable_csv_file_id || "").trim();
 
     if (!pdfFileId) {
-      // Deliverables not uploaded / not written to deal yet
       return {
         statusCode: 409,
         headers: corsHeaders(event.headers?.origin),
@@ -163,13 +144,15 @@ export async function handler(event) {
       };
     }
 
-    const signed = await createSignedUrl(pdfFileId);
-    if (!signed.ok) {
-      return {
-        statusCode: 500,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: signed.text || "Failed to create signed URL", deal_id: resolvedDealId }),
-      };
+    const pdfSigned = await createSignedUrl(pdfFileId);
+    if (!pdfSigned.ok) {
+      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: pdfSigned.text || "Failed to create signed URL", deal_id: resolvedDealId }) };
+    }
+
+    let csv_url = "";
+    if (csvFileId) {
+      const csvSigned = await createSignedUrl(csvFileId);
+      if (csvSigned.ok) csv_url = csvSigned.url;
     }
 
     return {
@@ -180,15 +163,13 @@ export async function handler(event) {
         deal_id: resolvedDealId,
         lead_id: String(deal.properties?.lead_id || lead_id || "").trim(),
         pdf_file_id: pdfFileId,
-        pdf_url: signed.url,
+        pdf_url: pdfSigned.url,
+        csv_file_id: csvFileId || null,
+        csv_url: csv_url || null,
       }),
     };
   } catch (err) {
     console.error("visitor-pdf-link error:", err);
-    return {
-      statusCode: 500,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: String(err?.message || err) }),
-    };
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: String(err?.message || err) }) };
   }
 }
