@@ -13,9 +13,7 @@ export async function handler(event) {
 
   function corsHeaders(originRaw) {
     const origin = (originRaw || "").trim();
-    const allowOrigin = origin
-      ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0])
-      : "*";
+    const allowOrigin = origin ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0]) : "*";
     return {
       "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -49,14 +47,14 @@ export async function handler(event) {
     return { ok: res.ok, status: res.status, json, text };
   }
 
-  async function hsGet(path) {
-    return fetchJson(`https://api.hubapi.com${path}`, { method: "GET", headers: { Authorization: `Bearer ${HS_TOKEN}` } });
-  }
   async function hsPost(path, body) {
     return fetchJson(`https://api.hubapi.com${path}`, { method: "POST", headers: HS_HEADERS, body: JSON.stringify(body) });
   }
   async function hsPatch(path, body) {
     return fetchJson(`https://api.hubapi.com${path}`, { method: "PATCH", headers: HS_HEADERS, body: JSON.stringify(body) });
+  }
+  async function hsGet(path) {
+    return fetchJson(`https://api.hubapi.com${path}`, { method: "GET", headers: { Authorization: `Bearer ${HS_TOKEN}` } });
   }
 
   function normalizeSpaces(str) { return String(str || "").replace(/\s+/g, " ").trim(); }
@@ -64,6 +62,7 @@ export async function handler(event) {
     const m = String(zip || "").match(/\b(\d{3})\d{2}(?:-\d{4})?\b/);
     return m ? m[1] : "";
   }
+
   function normalizeOwnership(v) {
     const s = normalizeSpaces(v);
     const low = s.toLowerCase();
@@ -71,6 +70,7 @@ export async function handler(event) {
     if (low.startsWith("rent")) return "Renter";
     return s;
   }
+
   function normalizeTimeline(v) {
     const s = normalizeSpaces(v);
     const low = s.toLowerCase();
@@ -105,37 +105,18 @@ export async function handler(event) {
     return Math.round(clamped / 5) * 5;
   }
 
-  async function dealPropertyExists(name) {
-    const r = await hsGet(`/crm/v3/properties/deals/${encodeURIComponent(name)}`);
-    return r.ok;
-  }
-
-  async function resolvePipelineAndStage() {
-    // If you set env vars, we will try to honor them. Otherwise pick first available.
-    const wantPipeline = (process.env.HUBSPOT_DEAL_PIPELINE_ID || "").trim();
-    const wantStage = (process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "").trim();
-
-    const r = await hsGet("/crm/v3/pipelines/deals");
-    if (!r.ok || !Array.isArray(r.json?.results) || !r.json.results.length) {
-      // fallback to common defaults if pipelines endpoint fails
-      return { pipelineId: wantPipeline || "default", stageId: wantStage || "appointmentscheduled" };
-    }
-
-    const pipelines = r.json.results;
-    let pipeline = wantPipeline ? pipelines.find(p => String(p.id) === wantPipeline) : null;
-    if (!pipeline) pipeline = pipelines[0];
-
-    const stages = Array.isArray(pipeline.stages) ? pipeline.stages : [];
-    let stage = wantStage ? stages.find(s => String(s.id) === wantStage) : null;
-    if (!stage) stage = stages[0] || null;
-
-    return { pipelineId: String(pipeline.id), stageId: stage ? String(stage.id) : (wantStage || "") };
+  function parseCityStateZipFromFormattedAddress(formatted) {
+    // Matches: "..., City, ST 12345" (common Google formatted address pattern)
+    const s = String(formatted || "");
+    const m = s.match(/,\s*([^,]+),\s*([A-Z]{2})\s*(\d{5})(?:-\d{4})?/);
+    if (!m) return null;
+    return { city: m[1].trim(), state: m[2].trim(), zip: m[3].trim() };
   }
 
   async function findDealByLeadId(leadId) {
     const r = await hsPost("/crm/v3/objects/deals/search", {
       filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
-      properties: ["lead_id"],
+      properties: ["lead_id", "listing_status", "lead_price", "redacted_location", "time_line", "home_ownership"],
       limit: 1,
     });
     return r.ok && r.json?.results?.[0] ? r.json.results[0] : null;
@@ -147,7 +128,7 @@ export async function handler(event) {
   }
 
   async function createLineItemForDeal({ dealId, leadId, price, description, name }) {
-    // associationTypeId 20 = line item -> deal (HubSpot-defined)
+    // associationTypeId 20 = line item -> deal
     const r = await hsPost("/crm/v3/objects/line_items", {
       properties: {
         name,
@@ -163,6 +144,7 @@ export async function handler(event) {
     return r.ok ? r.json?.id : null;
   }
 
+  // (Optional) Contact upsert helpers (we will SKIP by default)
   async function findContactIdByEmail(email) {
     const r = await hsPost("/crm/v3/objects/contacts/search", {
       filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
@@ -187,10 +169,9 @@ export async function handler(event) {
     const payload = body.payload || {};
     const risk = body.risk || null;
 
-    // ✅ NEW: allow skipping contact upsert
-    const skipContact =
-      body?.options?.skip_contact === true ||
-      String(process.env.HUBSPOT_SYNC_SKIP_CONTACT || "0") === "1";
+    // ✅ DEFAULT: do NOT create/update Contact from hubspot-sync
+    // You can force it on by sending options.skip_contact=false explicitly.
+    const skipContact = body?.options?.skip_contact !== false;
 
     const email = normalizeSpaces(payload.email);
     if (!email) {
@@ -201,18 +182,33 @@ export async function handler(event) {
       normalizeSpaces(payload.lead_id) ||
       (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-    const home_ownership = normalizeOwnership(payload.home_ownership);
-    const time_line = normalizeTimeline(payload.time_line);
+    // Normalize timeline + ownership with sensible defaults (fixes "— — —")
+    const home_ownership =
+      normalizeOwnership(payload.home_ownership || payload.homeOwnership || payload.ownership || "") || "Unknown";
+    const time_line =
+      normalizeTimeline(payload.time_line || payload.timeline || payload.timeLine || "") || "Researching";
 
-    const city = normalizeSpaces(payload.city || "");
-    const stateCode = normalizeSpaces(payload.state_code || payload.state || "");
-    const zip = normalizeSpaces(payload.postal_code || payload.zip || "");
+    // Redacted location (prefer city/state/zip; fallback parse from formatted address)
+    let city = normalizeSpaces(payload.city || "");
+    let stateCode = normalizeSpaces(payload.state_code || payload.state || "");
+    let zip = normalizeSpaces(payload.postal_code || payload.zip || "");
+
+    if ((!city || !stateCode || !zip) && payload.hsc_property_address) {
+      const parsed = parseCityStateZipFromFormattedAddress(payload.hsc_property_address);
+      if (parsed) {
+        city = city || parsed.city;
+        stateCode = stateCode || parsed.state;
+        zip = zip || parsed.zip;
+      }
+    }
+
     const zip3 = safeZip3(zip);
-    const redacted_location = [city, stateCode].filter(Boolean).join(", ") + (zip3 ? ` ${zip3}xx` : "");
+    const redacted_location_raw = [city, stateCode].filter(Boolean).join(", ");
+    const redacted_location = (redacted_location_raw ? redacted_location_raw : "Location Unknown") + (zip3 ? ` ${zip3}xx` : "");
 
     const lead_price = computeLeadPrice(payload, risk);
 
-    // ✅ CONTACT (optional)
+    // ✅ CONTACT UPSERT (ONLY if you explicitly want it)
     if (!skipContact) {
       await upsertContact(email, {
         firstname: payload.firstname || "",
@@ -233,80 +229,78 @@ export async function handler(event) {
       });
     }
 
-    // ✅ RESOLVE a real pipeline + stage that exist (prevents silent deal create failure)
-    const { pipelineId, stageId } = await resolvePipelineAndStage();
+    // ✅ Deal name: clean, no double dashes
+    const dealname = `Security Lead — ${redacted_location} — ${time_line} — ${home_ownership}`;
 
-    // ✅ Build deal properties safely (only include custom props if they exist)
-    const baseDealProps = {
-      dealname: `Security Lead — ${redacted_location || "Location"} — ${time_line || "—"} — ${home_ownership || "—"}`,
-      pipeline: pipelineId,
-      dealstage: stageId,
-      amount: String(lead_price),
-    };
+    const pipeline = process.env.HUBSPOT_DEAL_PIPELINE_ID || "default";
+    const stageQualified = process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "appointmentscheduled";
 
-    const customPropsWanted = {
+    const dealProps = {
+      dealname,
+      pipeline,
+      dealstage: stageQualified,
       lead_id,
       listing_status: "Qualified",
       lead_price: String(lead_price),
       redacted_location,
       time_line,
       home_ownership,
+      amount: String(lead_price),
     };
 
-    const customKeys = Object.keys(customPropsWanted);
-    const existsFlags = await Promise.all(customKeys.map(k => dealPropertyExists(k)));
-    const safeCustom = {};
-    customKeys.forEach((k, i) => { if (existsFlags[i]) safeCustom[k] = customPropsWanted[k]; });
-
-    const dealProps = { ...baseDealProps, ...safeCustom };
-
-    // ✅ Create or update deal
-    const existingDeal = await findDealByLeadId(lead_id);
+    // ✅ Idempotency improvement:
+    // If the client already has a deal_id, update it directly (avoids search/index delay duplicates).
+    const clientDealId = normalizeSpaces(body.deal_id || "");
     let dealId = null;
 
-    if (!existingDeal?.id) {
-      const created = await hsPost("/crm/v3/objects/deals", { properties: dealProps });
-
-      // ✅ FAIL LOUD (this is the main fix)
-      if (!created.ok || !created.json?.id) {
-        return {
-          statusCode: 500,
-          headers: corsHeaders(event.headers?.origin),
-          body: JSON.stringify({
-            error: "Deal create failed",
-            hubspot_status: created.status,
-            hubspot_response: created.text,
-            pipelineId,
-            stageId,
-            tried_properties: Object.keys(dealProps),
-          }),
-        };
-      }
-
-      dealId = created.json.id;
-    } else {
-      dealId = existingDeal.id;
-
-      const patched = await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: dealProps });
-      if (!patched.ok) {
-        return {
-          statusCode: 500,
-          headers: corsHeaders(event.headers?.origin),
-          body: JSON.stringify({
-            error: "Deal update failed",
-            hubspot_status: patched.status,
-            hubspot_response: patched.text,
-            deal_id: dealId,
-            pipelineId,
-            stageId,
-          }),
-        };
+    if (clientDealId) {
+      const patched = await hsPatch(`/crm/v3/objects/deals/${encodeURIComponent(clientDealId)}`, { properties: dealProps });
+      if (patched.ok) {
+        dealId = clientDealId;
       }
     }
 
-    // ✅ Line item (optional, but helpful)
+    // If not patched, search by lead_id
+    if (!dealId) {
+      const existingDeal = await findDealByLeadId(lead_id);
+      if (!existingDeal?.id) {
+        const created = await hsPost("/crm/v3/objects/deals", { properties: dealProps });
+
+        // Fail loud if HubSpot rejects it
+        if (!created.ok || !created.json?.id) {
+          return {
+            statusCode: 500,
+            headers: corsHeaders(event.headers?.origin),
+            body: JSON.stringify({
+              error: "Deal create failed",
+              hubspot_status: created.status,
+              hubspot_response: created.text,
+            }),
+          };
+        }
+
+        dealId = created.json.id;
+      } else {
+        dealId = existingDeal.id;
+        const patched = await hsPatch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties: dealProps });
+        if (!patched.ok) {
+          return {
+            statusCode: 500,
+            headers: corsHeaders(event.headers?.origin),
+            body: JSON.stringify({
+              error: "Deal update failed",
+              hubspot_status: patched.status,
+              hubspot_response: patched.text,
+              deal_id: dealId,
+            }),
+          };
+        }
+      }
+    }
+
+    // Line item (create once)
     let lineItemId = null;
-    try {
+    if (dealId) {
       const existingLineItems = await getLineItemAssociations(dealId);
       if (!existingLineItems.length) {
         lineItemId = await createLineItemForDeal({
@@ -319,9 +313,6 @@ export async function handler(event) {
       } else {
         lineItemId = existingLineItems[0];
       }
-    } catch (e) {
-      // don't fail the whole request if line item fails
-      lineItemId = null;
     }
 
     return {
@@ -333,17 +324,11 @@ export async function handler(event) {
         deal_id: dealId,
         line_item_id: lineItemId,
         lead_price,
-        pipelineId,
-        stageId,
         skipped_contact: skipContact,
       }),
     };
   } catch (err) {
     console.error("hubspot-sync error:", err);
-    return {
-      statusCode: 500,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: String(err?.message || err) }),
-    };
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: String(err?.message || err) }) };
   }
 }
