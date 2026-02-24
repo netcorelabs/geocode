@@ -1,373 +1,383 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Smart Home Security Calculator</title>
+// netlify/functions/hubspot-sync.js
+import crypto from "node:crypto";
 
-<style>
-:root {
-  --primary:#0b1c2d;
-  --accent:#2563eb;
-  --bg:#f7f9fb;
-  --text:#1f2937;
-  --muted:#6b7280;
-  --radius:12px;
-  --border:#e5e7eb;
-  --card:#ffffff;
-}
+export async function handler(event) {
+  const allowedOrigins = [
+    "https://www.homesecurecalculator.com",
+    "https://homesecurecalculator.com",
+    "https://www.netcoreleads.com",
+    "https://netcoreleads.com",
+    "https://api.netcoreleads.com",
+    "https://hubspotgate.netlify.app",
+  ];
 
-body { margin:0; font-family:Inter,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
-.calculator { max-width:1200px; margin:auto; padding:28px 18px 54px; }
-
-.topbar{
-  display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
-  padding:16px 18px; background:var(--card); border:1px solid var(--border); border-radius:16px;
-}
-
-.brand .kicker{ color:var(--accent); font-weight:900; letter-spacing:.14em; text-transform:uppercase; font-size:12px; }
-.brand h1{ margin:0; font-size:28px; line-height:1.15; color:var(--primary); }
-.brand .sub{ margin:6px 0 0; color:var(--muted); font-size:14px; }
-
-.addrCard{ min-width:320px; background:#f9fafb; border:1px solid var(--border); border-radius:14px; padding:12px 14px; }
-.addrCard .label{ color:var(--muted); font-size:12px; font-weight:800; }
-.addrCard .addr{ margin-top:6px; font-weight:900; color:#4b5563; }
-
-.section{ margin-top:22px; background:var(--card); border:1px solid var(--border); border-radius:16px; padding:18px; }
-.section h2{ margin:0 0 12px; font-size:18px; font-weight:900; }
-
-.grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
-
-label{ font-size:13px; font-weight:800; }
-select,input{ width:100%; padding:12px; border-radius:var(--radius); border:1px solid #d1d5db; }
-
-.totals{ margin-top:22px; background:var(--primary); color:#fff; padding:18px; border-radius:16px; }
-.totalRow{ display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid rgba(255,255,255,.10); }
-.totalRow:last-child{ border-bottom:none; }
-.totalRow span{ color:#dbeafe; font-weight:800; font-size:13px; }
-.totalRow b{ color:#fff; font-weight:900; font-size:18px; }
-
-#device-summary{
-  margin-top:10px; font-size:12px; color:#e0f2fe; line-height:1.45;
-  max-height:86px; overflow:auto; padding-top:10px; border-top:1px dashed rgba(255,255,255,.18);
-}
-
-button{
-  width:100%; padding:14px; margin-top:16px; background:var(--accent); color:#fff;
-  border:none; border-radius:14px; font-size:16px; font-weight:900; cursor:pointer;
-}
-button:disabled{ opacity:.7; cursor:not-allowed; }
-</style>
-</head>
-
-<body>
-<div class="calculator">
-
-  <div class="topbar">
-    <div class="brand">
-      <div class="kicker">System Builder</div>
-      <h1>Smart Home Security Cost Estimator</h1>
-      <p class="sub">Your selections flow directly into your Executive Risk Report.</p>
-    </div>
-    <div class="addrCard">
-      <div class="label">Property</div>
-      <div class="addr" id="addrLine">Loading…</div>
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>System Configuration</h2>
-    <div class="grid">
-      <div>
-        <label>Package</label>
-        <select id="tier"></select>
-      </div>
-      <div>
-        <label>Installation</label>
-        <select id="install"></select>
-      </div>
-      <div>
-        <label>Monitoring</label>
-        <select id="monitoring"></select>
-      </div>
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>Devices</h2>
-    <div class="grid">
-      <div><label>Indoor Cameras</label><input id="indoorCam" type="number" min="0" value="0"></div>
-      <div><label>Outdoor Cameras</label><input id="outdoorCam" type="number" min="0" value="0"></div>
-      <div><label>Video Doorbells</label><input id="doorbell" type="number" min="0" value="0"></div>
-      <div><label>Smart Locks</label><input id="lock" type="number" min="0" value="0"></div>
-    </div>
-  </div>
-
-  <div class="totals">
-    <div class="totalRow"><span>Upfront</span><b id="upfront">$0</b></div>
-    <div class="totalRow"><span>Monthly</span><b id="monthly">$0/mo</b></div>
-    <div id="device-summary">No devices selected</div>
-  </div>
-
-  <button id="submit-btn">Continue to Executive Risk Report →</button>
-</div>
-
-<script>
-(() => {
-  /* =========================
-     CONFIG
-  ========================= */
-  const STORAGE_KEY = "hsc_payload";
-  const LS_BACKUP_KEY = "hsc_payload_backup";
-
-  const RESULTS_URL = "https://www.homesecurecalculator.com/hscresults";
-
-  // Netlify functions (Deal early)
-  const API = "https://api.netcoreleads.com/.netlify/functions";
-  const HUBSPOT_SYNC_URL = API + "/hubspot-sync";
-
-  // Storage keys for IDs
-  const LEAD_ID_KEY = "hsc_lead_id";
-  const DEAL_ID_KEY = "hsc_deal_id";
-  const LINE_ITEM_ID_KEY = "hsc_line_item_id";
-
-  const catalog = {
-    tiers:[
-      {id:"basic",name:"Basic Alarm System",price:499},
-      {id:"standard",name:"Smart Home Security",price:899},
-      {id:"premium",name:"Advanced AI Security",price:1499}
-    ],
-    install:[
-      {id:"standard",name:"Standard Install",cost:299},
-      {id:"advanced",name:"Advanced Install",cost:499}
-    ],
-    monitoring:[
-      {id:"self",name:"Self Monitoring",monthly:0},
-      {id:"pro",name:"24/7 Monitoring",monthly:39},
-      {id:"video",name:"Pro + Video",monthly:49}
-    ],
-    devicePrices:{ indoorCam:129, outdoorCam:199, doorbell:179, lock:249 }
-  };
-
-  const el = (id) => document.getElementById(id);
-
-  function getStoredAny(key){
-    try{ const a = (sessionStorage.getItem(key)||"").trim(); if(a) return a; }catch(e){}
-    try{ const b = (localStorage.getItem(key)||"").trim(); if(b) return b; }catch(e){}
-    return "";
-  }
-  function setStored(key, val){
-    try{ sessionStorage.setItem(key, String(val||"")); }catch(e){}
-    try{ localStorage.setItem(key, String(val||"")); }catch(e){}
+  function corsHeaders(origin) {
+    const safeOrigin = (origin || "").trim() || allowedOrigins[0];
+    const allowedOrigin = allowedOrigins.includes(safeOrigin) ? safeOrigin : allowedOrigins[0];
+    return {
+      "Access-Control-Allow-Origin": allowedOrigin,
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Vary": "Origin",
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json",
+    };
   }
 
-  function readPayload(){
-    try{
-      const s = sessionStorage.getItem(STORAGE_KEY) || localStorage.getItem(LS_BACKUP_KEY) || "{}";
-      return JSON.parse(s);
-    }catch{ return {}; }
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
   }
-  function writePayload(p){
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch(e){}
-    try { localStorage.setItem(LS_BACKUP_KEY, JSON.stringify(p)); } catch(e){}
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
   }
 
-  function fillSelect(id,list,label){
-    const s = el(id);
-    s.innerHTML="";
-    list.forEach(o=>{
-      const opt=document.createElement("option");
-      opt.value=o.id;
-      opt.textContent=label(o);
-      s.appendChild(opt);
+  const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
+  if (!HS_TOKEN) {
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
+  }
+
+  const HS_HEADERS = { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" };
+
+  async function readText(res) {
+    try { return await res.text(); } catch { return ""; }
+  }
+
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    const text = await readText(res);
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    return { ok: res.ok, status: res.status, json, text };
+  }
+
+  const hsGet = (path) => fetchJson(`https://api.hubapi.com${path}`, { method: "GET", headers: { Authorization: `Bearer ${HS_TOKEN}` } });
+  const hsPost = (path, body) =>
+    fetchJson(`https://api.hubapi.com${path}`, { method: "POST", headers: HS_HEADERS, body: JSON.stringify(body) });
+  const hsPatch = (path, body) =>
+    fetchJson(`https://api.hubapi.com${path}`, { method: "PATCH", headers: HS_HEADERS, body: JSON.stringify(body) });
+
+  function normalizeSpaces(str) { return String(str || "").replace(/\s+/g, " ").trim(); }
+
+  function safeZip3(zip) {
+    const m = String(zip || "").match(/\b(\d{3})\d{2}(?:-\d{4})?\b/);
+    return m ? m[1] : "";
+  }
+
+  function normalizeOwnership(v) {
+    const s = normalizeSpaces(v);
+    const low = s.toLowerCase();
+    if (low.startsWith("own")) return "Owner";
+    if (low.startsWith("rent")) return "Renter";
+    return s || "Unknown";
+  }
+
+  function normalizeTimeline(v) {
+    const s = normalizeSpaces(v);
+    const low = s.toLowerCase();
+    if (!s) return "Researching";
+    if (low === "asap" || low.includes("a.s.a.p")) return "ASAP";
+    if (low.includes("1") && low.includes("week")) return "1 Week";
+    if ((low.includes("2") && low.includes("3") && low.includes("week")) || low.includes("2-3")) return "2 - 3 Weeks";
+    if (low.includes("30") && (low.includes("day") || low.includes("+"))) return "30 Days +";
+    return s;
+  }
+
+  function computeLeadPrice(payload, risk) {
+    const explicit = Number(payload.lead_price ?? payload.leadPrice ?? payload.price ?? NaN);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+
+    const timeLine = normalizeTimeline(payload.time_line);
+    const own = normalizeOwnership(payload.home_ownership);
+    const riskScore = Number(payload.hsc_risk_score ?? risk?.scoring?.riskScore ?? NaN);
+
+    const base = 85;
+    const bump = Number.isFinite(riskScore) ? Math.max(0, Math.min(100, riskScore)) * 1.2 : 40;
+
+    const timelineMult =
+      timeLine === "ASAP" ? 1.4 :
+      timeLine === "1 Week" ? 1.25 :
+      timeLine === "2 - 3 Weeks" ? 1.1 :
+      timeLine === "30 Days +" ? 0.9 : 1.0;
+
+    const ownerMult = own === "Owner" ? 1.15 : 1.0;
+
+    const raw = (base + bump) * timelineMult * ownerMult;
+    const clamped = Math.max(49, Math.min(399, raw));
+    return Math.round(clamped / 5) * 5;
+  }
+
+  // ---------- Deal property safety ----------
+  async function dealPropertyExists(name) {
+    const r = await hsGet(`/crm/v3/properties/deals/${encodeURIComponent(name)}`);
+    return r.ok;
+  }
+
+  async function tryCreateDealProperty({ name, label, type, fieldType }) {
+    // If your private app lacks permission for properties, this will fail; we treat as best-effort.
+    const r = await hsPost("/crm/v3/properties/deals", {
+      name,
+      label,
+      type,       // "string" | "number" | "enumeration" | etc.
+      fieldType,  // "text" | "number" | "select" | etc.
+      groupName: "dealinformation",
     });
+    return r.ok;
   }
 
-  fillSelect("tier",catalog.tiers,o=>`${o.name} ($${o.price})`);
-  fillSelect("install",catalog.install,o=>`${o.name} ($${o.cost})`);
-  fillSelect("monitoring",catalog.monitoring,o=>`${o.name} ($${o.monthly}/mo)`);
+  async function ensureDealPropsBestEffort() {
+    // Minimum required for your whole flow:
+    // - lead_id: used by upload-deliverables and visitor-pdf-link search
+    // - deliverable_pdf_file_id / deliverable_csv_file_id: set by upload-deliverables
+    const desired = [
+      { name: "lead_id", label: "Lead ID", type: "string", fieldType: "text", required: true },
+      { name: "deliverable_pdf_file_id", label: "Deliverable PDF File ID", type: "string", fieldType: "text", required: false },
+      { name: "deliverable_csv_file_id", label: "Deliverable CSV File ID", type: "string", fieldType: "text", required: false },
 
-  function ensureLeadId(payload){
-    let leadId = String(payload.lead_id || "").trim() || getStoredAny(LEAD_ID_KEY);
-    if(!leadId){
-      leadId =
-        (window.crypto && typeof window.crypto.randomUUID === "function")
-          ? window.crypto.randomUUID()
-          : (Date.now() + "-" + Math.random().toString(16).slice(2));
-    }
-    payload.lead_id = leadId;
-    setStored(LEAD_ID_KEY, leadId);
-    return leadId;
-  }
+      // Nice-to-have listing fields (skip if not possible)
+      { name: "lead_price", label: "Lead Price", type: "number", fieldType: "number", required: false },
+      { name: "listing_status", label: "Listing Status", type: "string", fieldType: "text", required: false },
+      { name: "redacted_location", label: "Redacted Location", type: "string", fieldType: "text", required: false },
+      { name: "time_line", label: "Timeline", type: "string", fieldType: "text", required: false },
+      { name: "home_ownership", label: "Home Ownership", type: "string", fieldType: "text", required: false },
+    ];
 
-  function buildResultsUrl(payload){
-    const u = new URL(RESULTS_URL);
-    u.searchParams.set("lead_id", String(payload.lead_id || "").trim());
-    if(payload.email) u.searchParams.set("email", String(payload.email || "").trim());
-    const dealId = getStoredAny(DEAL_ID_KEY);
-    if(dealId) u.searchParams.set("deal_id", dealId);
-    return u.toString();
-  }
+    const exists = {};
+    const created = {};
+    const missingRequired = [];
 
-  async function readText(r){ try { return await r.text(); } catch { return ""; } }
-  async function fetchWithTimeout(url, options={}, ms=20000){
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
-    try { return await fetch(url, { ...options, signal: ctrl.signal }); }
-    finally { clearTimeout(t); }
-  }
-  async function fetchJson(url, options){
-    const r = await fetchWithTimeout(url, options, 20000);
-    const t = await readText(r);
-    let j=null; try{ j = t ? JSON.parse(t) : null; }catch(e){ j=null; }
-    return { ok:r.ok, status:r.status, json:j, text:t };
-  }
+    for (const p of desired) {
+      const ok = await dealPropertyExists(p.name);
+      if (ok) { exists[p.name] = true; continue; }
 
-  async function createDealEarly(payload){
-    // IMPORTANT: force defaults so the deal name isn’t blank
-    payload.time_line = payload.time_line || "Researching";
-    payload.home_ownership = payload.home_ownership || "Unknown";
+      const made = await tryCreateDealProperty(p);
+      if (made) { created[p.name] = true; exists[p.name] = true; continue; }
 
-    // Use same lead_id across pages
-    ensureLeadId(payload);
-    writePayload(payload);
-
-    const res = await fetchJson(HUBSPOT_SYNC_URL, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({
-        payload,
-        // IMPORTANT: this requires the updated hubspot-sync.js I provide below
-        options: { skip_contact: true }
-      })
-    });
-
-    if(!res.ok || !res.json?.deal_id){
-      return { ok:false, error: res.text || ("hubspot-sync failed ("+res.status+")") };
+      exists[p.name] = false;
+      if (p.required) missingRequired.push(p.name);
     }
 
-    // Trust the response lead_id (hubspot-sync may normalize/override)
-    if(res.json?.lead_id){
-      payload.lead_id = String(res.json.lead_id).trim();
-      setStored(LEAD_ID_KEY, payload.lead_id);
-    }
-
-    const dealId = String(res.json.deal_id || "").trim();
-    const lineItemId = String(res.json.line_item_id || "").trim();
-
-    setStored(DEAL_ID_KEY, dealId);
-    if(lineItemId) setStored(LINE_ITEM_ID_KEY, lineItemId);
-
-    // also persist into payload so Results can read it without query
-    payload.deal_id = dealId;
-    payload.line_item_id = lineItemId;
-    writePayload(payload);
-
-    return { ok:true, deal_id: dealId, line_item_id: lineItemId };
+    return { exists, created, missingRequired };
   }
 
-  function calculate(){
-    const tier = catalog.tiers.find(x => x.id === el("tier").value);
-    const inst = catalog.install.find(x => x.id === el("install").value);
-    const mon  = catalog.monitoring.find(x => x.id === el("monitoring").value);
-
-    const indoor = parseInt(el("indoorCam").value)||0;
-    const outdoor = parseInt(el("outdoorCam").value)||0;
-    const door = parseInt(el("doorbell").value)||0;
-    const lock = parseInt(el("lock").value)||0;
-
-    const upfront = tier.price + inst.cost +
-      indoor*catalog.devicePrices.indoorCam +
-      outdoor*catalog.devicePrices.outdoorCam +
-      door*catalog.devicePrices.doorbell +
-      lock*catalog.devicePrices.lock;
-
-    const monthly = mon.monthly;
-
-    el("upfront").textContent = "$" + upfront.toLocaleString();
-    el("monthly").textContent = "$" + monthly.toLocaleString() + "/mo";
-
-    const summary=[];
-    if(indoor) summary.push(`Indoor x${indoor}`);
-    if(outdoor) summary.push(`Outdoor x${outdoor}`);
-    if(door) summary.push(`Doorbell x${door}`);
-    if(lock) summary.push(`Locks x${lock}`);
-
-    el("device-summary").textContent = summary.length ? summary.join(", ") : "No devices selected";
-
-    const payload = readPayload();
-    payload.tier=tier.id;
-    payload.install=inst.id;
-    payload.monitoring=mon.id;
-
-    payload.indoorCam=indoor;
-    payload.outdoorCam=outdoor;
-    payload.doorbell=door;
-    payload.lock=lock;
-
-    payload.upfront=upfront;
-    payload.monthly=monthly;
-
-    payload.hsc_upfront=upfront;
-    payload.hsc_monthly=monthly;
-    payload.hsc_devices=summary.join(", ");
-
-    // keep lead_id stable
-    ensureLeadId(payload);
-
-    // keep any existing email/address from step 1
-    payload.email = payload.email || getStoredAny("hsc_email") || "";
-
-    writePayload(payload);
-    return payload;
-  }
-
-  document.addEventListener("DOMContentLoaded", async () => {
-    const payload = readPayload();
-
-    if(!payload.email){
-      window.location.href = "https://www.homesecurecalculator.com/";
-      return;
-    }
-
-    el("addrLine").textContent = payload.address || payload.geo?.formatted || payload.hsc_property_address || "—";
-
-    document.querySelectorAll("select,input").forEach(n=>{
-      n.addEventListener("input", calculate);
-      n.addEventListener("change", calculate);
-    });
-
-    el("submit-btn").addEventListener("click", async () => {
-      const btn = el("submit-btn");
-      const original = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = "Creating your listing…";
-
-      try{
-        const p = calculate();
-
-        const created = await createDealEarly(p);
-        if(!created.ok){
-          alert("Could not create your listing (deal).\n\n" + created.error);
-          btn.disabled = false;
-          btn.textContent = original;
-          return;
-        }
-
-        btn.textContent = "Redirecting…";
-        window.location.href = buildResultsUrl(p);
-
-      } catch(e){
-        alert("Error:\n" + String(e?.message || e));
-        btn.disabled = false;
-        btn.textContent = original;
+  function pickExistingProps(props, existsMap) {
+    const out = {};
+    const dropped = [];
+    for (const [k, v] of Object.entries(props || {})) {
+      if (existsMap && existsMap[k] === false) {
+        dropped.push(k);
+        continue;
       }
+      // if unknown in map, keep it (no check), but our map covers everything we send.
+      out[k] = v;
+    }
+    return { out, dropped };
+  }
+
+  async function findDealByLeadId(leadId) {
+    const r = await hsPost("/crm/v3/objects/deals/search", {
+      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
+      properties: ["lead_id", "dealname"],
+      limit: 1,
     });
+    return r.ok && r.json?.results?.[0] ? r.json.results[0] : null;
+  }
 
-    calculate();
-  });
-})();
-</script>
+  async function getLineItemAssociations(dealId) {
+    const r = await hsGet(`/crm/v3/objects/deals/${dealId}/associations/line_items`);
+    return (r.json?.results || []).map((x) => x.id).filter(Boolean);
+  }
 
-</body>
-</html>
+  async function createLineItemForDeal({ dealId, leadId, price, description, name }) {
+    // associationTypeId 20 = line item -> deal
+    const r = await hsPost("/crm/v3/objects/line_items", {
+      properties: {
+        name,
+        description,
+        quantity: 1,
+        price: price,
+        hs_sku: `LEAD-${leadId}`,
+      },
+      associations: [
+        {
+          to: { id: Number(dealId) },
+          types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 20 }],
+        },
+      ],
+    });
+    return r.ok ? r.json?.id : null;
+  }
+
+  try {
+    const body = JSON.parse(event.body || "{}");
+    const payload = body.payload || {};
+    const risk = body.risk || null;
+    const options = body.options || {};
+
+    // IMPORTANT: Default behavior = DO NOT upsert contacts in portal #2
+    // You said contacts should be updated via HSC_FORM_ID (portal #1).
+    const skip_contact = (options.skip_contact !== undefined) ? !!options.skip_contact : true;
+
+    // We still require email to keep lead_id stable and to support your broader flow
+    const email = normalizeSpaces(payload.email);
+    if (!email) {
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing payload.email" }) };
+    }
+
+    // Keep stable lead_id if provided
+    const lead_id =
+      normalizeSpaces(payload.lead_id) ||
+      (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+    const city = normalizeSpaces(payload.city || "");
+    const stateCode = normalizeSpaces(payload.state_code || payload.state || "");
+    const zip = normalizeSpaces(payload.postal_code || payload.zip || "");
+    const zip3 = safeZip3(zip);
+    const redacted_location = [city, stateCode].filter(Boolean).join(", ") + (zip3 ? ` ${zip3}xx` : "");
+
+    const home_ownership = normalizeOwnership(payload.home_ownership);
+    const time_line = normalizeTimeline(payload.time_line);
+    const lead_price = computeLeadPrice(payload, risk);
+
+    // Ensure deal properties exist (best effort) and never hard-fail on non-required fields
+    const propCheck = await ensureDealPropsBestEffort();
+    if (propCheck.missingRequired.length) {
+      return {
+        statusCode: 500,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({
+          error: "Missing required Deal properties in this HubSpot portal",
+          portal_hint: "This is portal tied to HUBSPOT_PRIVATE_APP_TOKEN (account #2)",
+          missing_required: propCheck.missingRequired,
+          fix: "Create these Deal properties manually as Single-line text (lead_id is required).",
+        }),
+      };
+    }
+
+    // CONTACT UPSERT DISABLED BY DEFAULT (portal #2)
+    // If you ever want to enable it, do it explicitly by passing options.skip_contact=false.
+    if (!skip_contact) {
+      // Minimal safe upsert using STANDARD contact properties ONLY (avoids custom property errors)
+      // NOTE: This keeps it from breaking even if custom contact fields aren't created.
+      const contactProps = {
+        firstname: payload.firstname || "",
+        lastname: payload.lastname || "",
+        email,
+        phone: payload.phone || "",
+        address: payload.street_address || payload.address || "",
+        city,
+        state: stateCode,
+        zip,
+      };
+
+      // find by email
+      const contactSearch = await hsPost("/crm/v3/objects/contacts/search", {
+        filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
+        properties: ["email"],
+        limit: 1,
+      });
+
+      const contactId = contactSearch.ok && contactSearch.json?.results?.[0]?.id ? contactSearch.json.results[0].id : null;
+
+      if (!contactId) {
+        await hsPost("/crm/v3/objects/contacts", { properties: contactProps });
+      } else {
+        await hsPatch(`/crm/v3/objects/contacts/${contactId}`, { properties: contactProps });
+      }
+    }
+
+    // Deal props we WANT to write
+    // Deal name format you requested: Security Lead — <City, ST ZIP3xx> — <deal_id>
+    // We set a placeholder first, then after creation we patch dealname to include the real deal_id.
+    const pipeline = process.env.HUBSPOT_DEAL_PIPELINE_ID || "default";
+    const stageQualified = process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "appointmentscheduled";
+
+    const initialDealName = `Security Lead — ${redacted_location || "Location"} — ${lead_id}`;
+
+    const desiredDealProps = {
+      dealname: initialDealName,               // always valid standard
+      pipeline,                                // standard
+      dealstage: stageQualified,               // standard
+      lead_id,                                 // custom (required)
+      listing_status: "Qualified",             // custom (optional)
+      lead_price: String(lead_price),          // custom (optional)
+      redacted_location,                       // custom (optional)
+      time_line,                               // custom (optional)
+      home_ownership,                          // custom (optional)
+    };
+
+    // Remove non-existing custom props (if create failed)
+    const { out: dealProps, dropped: droppedDealProps } =
+      pickExistingProps(desiredDealProps, propCheck.exists);
+
+    // Upsert deal by lead_id
+    const existingDeal = await findDealByLeadId(lead_id);
+    let dealId = null;
+
+    if (!existingDeal?.id) {
+      const created = await hsPost("/crm/v3/objects/deals", { properties: dealProps });
+      if (!created.ok || !created.json?.id) {
+        return {
+          statusCode: 500,
+          headers: corsHeaders(event.headers?.origin),
+          body: JSON.stringify({ error: "Deal create failed", detail: created.text, droppedDealProps }),
+        };
+      }
+      dealId = created.json.id;
+    } else {
+      dealId = existingDeal.id;
+      const patched = await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: dealProps });
+      if (!patched.ok) {
+        return {
+          statusCode: 500,
+          headers: corsHeaders(event.headers?.origin),
+          body: JSON.stringify({ error: "Deal update failed", detail: patched.text, droppedDealProps }),
+        };
+      }
+    }
+
+    // Patch dealname to include real deal_id (your requested naming)
+    if (dealId) {
+      const finalDealName = `Security Lead — ${redacted_location || "Location"} — ${dealId}`;
+      await hsPatch(`/crm/v3/objects/deals/${dealId}`, { properties: { dealname: finalDealName } });
+    }
+
+    // Line item attach (avoid duplicates)
+    let lineItemId = null;
+    if (dealId) {
+      const existingLineItems = await getLineItemAssociations(dealId);
+      if (!existingLineItems.length) {
+        lineItemId = await createLineItemForDeal({
+          dealId,
+          leadId: lead_id,
+          price: lead_price,
+          name: `Exclusive Lead — ${redacted_location || "Location"} — ${dealId}`,
+          description: `Redacted listing: ${redacted_location || "—"} | Deal: ${dealId}`,
+        });
+      } else {
+        lineItemId = existingLineItems[0];
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({
+        ok: true,
+        lead_id,
+        deal_id: dealId,
+        line_item_id: lineItemId,
+        lead_price,
+        dropped_deal_properties: droppedDealProps,
+        auto_created_deal_properties: Object.keys(propCheck.created || {}),
+        skip_contact,
+      }),
+    };
+  } catch (err) {
+    console.error("hubspot-sync error:", err);
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: String(err?.message || err) }),
+    };
+  }
+}
