@@ -22,27 +22,44 @@ export async function handler(event) {
     };
   }
 
-  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
-  if (event.httpMethod !== "POST") return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
+  }
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: "Method Not Allowed" }),
+    };
+  }
 
   const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
-  if (!HS_TOKEN) return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
+  if (!HS_TOKEN) {
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }),
+    };
+  }
 
-  // ✅ FORCE folderPath / folderId
+  // ✅ Destination folder env vars
+  // IMPORTANT: HubSpot requires folderId OR folderPath as *top-level* multipart fields (not inside options).
   const FOLDER_ID_RAW = String(process.env.HUBSPOT_FILES_FOLDER_ID || "").trim();
   const FOLDER_PATH_RAW = String(process.env.HUBSPOT_FILES_FOLDER_PATH || "").trim();
 
   const HAS_FOLDER_ID = /^\d+$/.test(FOLDER_ID_RAW);
-  const FOLDER_ID = HAS_FOLDER_ID ? Number(FOLDER_ID_RAW) : null;
+  const FOLDER_ID = HAS_FOLDER_ID ? FOLDER_ID_RAW : "";
 
-  // If user set a path but forgot leading "/", fix it. If empty, default to "/".
   const FIXED_FOLDER_PATH = (() => {
     const p = (FOLDER_PATH_RAW || "").trim();
     if (!p) return "/";
     return p.startsWith("/") ? p : ("/" + p);
   })();
 
-  async function readText(res) { try { return await res.text(); } catch { return ""; } }
+  async function readText(res) {
+    try { return await res.text(); } catch { return ""; }
+  }
+
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     const text = await readText(res);
@@ -56,6 +73,7 @@ export async function handler(event) {
   async function hsGet(path) {
     return fetchJson(`https://api.hubapi.com${path}`, { method: "GET", headers: hsAuth });
   }
+
   async function hsPost(path, body) {
     return fetchJson(`https://api.hubapi.com${path}`, {
       method: "POST",
@@ -63,6 +81,7 @@ export async function handler(event) {
       body: JSON.stringify(body),
     });
   }
+
   async function hsPatch(path, body) {
     return fetchJson(`https://api.hubapi.com${path}`, {
       method: "PATCH",
@@ -90,30 +109,67 @@ export async function handler(event) {
     return new Blob([buf], { type: mime });
   }
 
-  async function uploadFileToHubSpot({ blob, filename }) {
+  function buildUploadForm({ blob, filename, useFolderId, useFolderPath }) {
     const form = new FormData();
 
-    // ✅ ALWAYS include one of these (HubSpot validation requires it)
-    const options = {
-      access: "PRIVATE",
-      overwrite: false,
-      duplicateValidationStrategy: "NONE",
-      ...(FOLDER_ID ? { folderId: FOLDER_ID } : { folderPath: FIXED_FOLDER_PATH }),
-    };
-
-    form.append("options", JSON.stringify(options));
+    // options is ONLY for file options (access, ttl). Folder goes in its own field.
+    form.append("options", JSON.stringify({ access: "PRIVATE" }));
+    form.append("fileName", filename);
     form.append("file", blob, filename);
 
-    const res = await fetch("https://api.hubapi.com/files/v3/files", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${HS_TOKEN}` },
-      body: form,
-    });
+    // ✅ REQUIRED: one of these MUST be present as its own multipart field
+    if (useFolderId) form.append("folderId", useFolderId);
+    else form.append("folderPath", useFolderPath || "/");
 
-    const text = await res.text().catch(() => "");
-    let json = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-    return { ok: res.ok, status: res.status, json, text, options_used: options };
+    return form;
+  }
+
+  async function uploadFileToHubSpot({ blob, filename }) {
+    // Prefer folderId if present, else folderPath. If folderId fails, fallback to folderPath.
+    const attempts = [];
+
+    if (FOLDER_ID) {
+      attempts.push({ folderId: FOLDER_ID, folderPath: "" });
+    }
+    attempts.push({ folderId: "", folderPath: FIXED_FOLDER_PATH || "/" });
+
+    let last = null;
+
+    for (const a of attempts) {
+      const form = buildUploadForm({
+        blob,
+        filename,
+        useFolderId: a.folderId,
+        useFolderPath: a.folderPath,
+      });
+
+      const res = await fetch("https://api.hubapi.com/files/v3/files", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${HS_TOKEN}` },
+        body: form,
+      });
+
+      const text = await res.text().catch(() => "");
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+
+      last = {
+        ok: res.ok,
+        status: res.status,
+        json,
+        text,
+        folder_field_used: a.folderId ? { folderId: a.folderId } : { folderPath: a.folderPath || "/" },
+      };
+
+      if (last.ok) return last;
+
+      // If it failed for a reason OTHER than folder, don't retry.
+      const msg = (json && (json.message || json.error)) ? String(json.message || json.error) : String(text || "");
+      const isFolderError = msg.toLowerCase().includes("folderid") || msg.toLowerCase().includes("folderpath");
+      if (!isFolderError) return last;
+    }
+
+    return last;
   }
 
   try {
@@ -126,11 +182,17 @@ export async function handler(event) {
     const csv_text = String(body.csv_text || "");
     const csv_base64 = String(body.csv_base64 || "").trim();
 
-    if (!pdf_base64) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing pdf_base64" }) };
-    if (!csv_text && !csv_base64) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing csv_text or csv_base64" }) };
-    if (!deal_id && !lead_id) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing deal_id or lead_id" }) };
+    if (!pdf_base64) {
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing pdf_base64" }) };
+    }
+    if (!csv_text && !csv_base64) {
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing csv_text or csv_base64" }) };
+    }
+    if (!deal_id && !lead_id) {
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing deal_id or lead_id" }) };
+    }
 
-    // Ensure deliverable properties exist
+    // Ensure required deal properties exist
     const okPdf = await dealPropertyExists("deliverable_pdf_file_id");
     const okCsv = await dealPropertyExists("deliverable_csv_file_id");
     if (!okPdf || !okCsv) {
@@ -169,8 +231,8 @@ export async function handler(event) {
         body: JSON.stringify({
           error: "PDF upload failed",
           detail: pdfUp.text,
-          options_used: pdfUp.options_used,
-          env_seen: { HUBSPOT_FILES_FOLDER_ID: HAS_FOLDER_ID ? FOLDER_ID_RAW : "", HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH_RAW || "" },
+          folder_field_used: pdfUp.folder_field_used,
+          env_seen: { HUBSPOT_FILES_FOLDER_ID: FOLDER_ID_RAW || "", HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH_RAW || "" },
         }),
       };
     }
@@ -183,8 +245,8 @@ export async function handler(event) {
         body: JSON.stringify({
           error: "CSV upload failed",
           detail: csvUp.text,
-          options_used: csvUp.options_used,
-          env_seen: { HUBSPOT_FILES_FOLDER_ID: HAS_FOLDER_ID ? FOLDER_ID_RAW : "", HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH_RAW || "" },
+          folder_field_used: csvUp.folder_field_used,
+          env_seen: { HUBSPOT_FILES_FOLDER_ID: FOLDER_ID_RAW || "", HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH_RAW || "" },
         }),
       };
     }
@@ -216,12 +278,16 @@ export async function handler(event) {
         deal_id: dealId,
         pdf_file_id: pdfFileId,
         csv_file_id: csvFileId,
-        folder_used: FOLDER_ID ? { folderId: FOLDER_ID } : { folderPath: FIXED_FOLDER_PATH },
-        env_seen: { HUBSPOT_FILES_FOLDER_ID: HAS_FOLDER_ID ? FOLDER_ID_RAW : "", HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH_RAW || "" },
+        folder_field_used: pdfUp.folder_field_used,
+        env_seen: { HUBSPOT_FILES_FOLDER_ID: FOLDER_ID_RAW || "", HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH_RAW || "" },
       }),
     };
   } catch (err) {
     console.error("upload-deliverables error:", err);
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: String(err?.message || err) }) };
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: String(err?.message || err) }),
+    };
   }
 }
