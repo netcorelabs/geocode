@@ -146,10 +146,10 @@ export async function handler(event) {
 
     const pdfSigned = await createSignedUrl(pdfFileId);
     if (!pdfSigned.ok) {
-      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: pdfSigned.text || "Failed to create signed URL", deal_id: resolvedDealId }) };
+      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: pdfSigned.text || "Failed to create PDF signed URL", deal_id: resolvedDealId }) };
     }
 
-    let csv_url = "";
+    let csv_url = null;
     if (csvFileId) {
       const csvSigned = await createSignedUrl(csvFileId);
       if (csvSigned.ok) csv_url = csvSigned.url;
@@ -165,7 +165,7 @@ export async function handler(event) {
         pdf_file_id: pdfFileId,
         pdf_url: pdfSigned.url,
         csv_file_id: csvFileId || null,
-        csv_url: csv_url || null,
+        csv_url,
       }),
     };
   } catch (err) {
