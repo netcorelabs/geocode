@@ -66,6 +66,15 @@ export async function handler(event) {
     return fetchJson(`https://api.hubapi.com${path}`, { method: "PUT", headers: hsAuth });
   }
 
+  function safeNumber(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function clamp(n, min, max) {
+    n = Number(n);
+    if (!Number.isFinite(n)) return min;
+    return Math.max(min, Math.min(max, n));
+  }
   function zip3(zip) {
     const m = String(zip || "").match(/\b(\d{3})\d{2}\b/);
     return m ? m[1] : "";
@@ -80,19 +89,101 @@ export async function handler(event) {
     return base + (z3 ? ` ${z3}xx` : "");
   }
 
-  function safeNumber(v) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
+  /* =========================================================
+     LEAD PRICING (Industry-style: tier + value-based)
+     - Risk drives urgency/value (higher risk => higher price)
+     - Selection value approximates revenue opportunity
+       system_value = upfront + monthly * MONTHS_FOR_VALUE
+     - lead_price = (BASE + system_value * VALUE_RATE) * MULT
+     - clamp to min/max so prices stay sane
+  ========================================================= */
+  const PRICING = {
+    MONTHS_FOR_VALUE: 12,   // change to 24/36 if you want lifetime value
+    VALUE_RATE: 0.02,       // 2% of system_value becomes part of lead price
+    MIN_PRICE: 29,
+    MAX_PRICE: 349,
+
+    // Risk tiers (0-100). Tweak as you like.
+    TIERS: [
+      { min: 80, tier: "Elite",    base: 95, mult: 1.45 },
+      { min: 65, tier: "Premium",  base: 75, mult: 1.25 },
+      { min: 50, tier: "Qualified",base: 55, mult: 1.10 },
+      { min: 35, tier: "Standard", base: 35, mult: 1.00 },
+      { min: 0,  tier: "Basic",    base: 25, mult: 0.85 },
+    ],
+  };
+
+  function computeLeadPrice(payload) {
+    const riskScore = clamp(
+      payload?.hsc_risk_score ?? payload?.risk_score ?? payload?.riskScore ?? payload?.risk?.scoring?.riskScore ?? 50,
+      0, 100
+    );
+
+    const upfront = safeNumber(payload?.hsc_upfront ?? payload?.upfront ?? 0);
+    const monthly = safeNumber(payload?.hsc_monthly ?? payload?.monthly ?? 0);
+
+    const systemValue = upfront + (monthly * PRICING.MONTHS_FOR_VALUE);
+
+    const tier = PRICING.TIERS.find(t => riskScore >= t.min) || PRICING.TIERS[PRICING.TIERS.length - 1];
+
+    const valueComponent = systemValue * PRICING.VALUE_RATE;
+    const raw = (tier.base + valueComponent) * tier.mult;
+
+    const leadPrice = Math.round(clamp(raw, PRICING.MIN_PRICE, PRICING.MAX_PRICE));
+
+    return {
+      riskScore: Math.round(riskScore),
+      upfront,
+      monthly,
+      systemValue: Math.round(systemValue),
+      tier: tier.tier,
+      leadPrice,
+      debug: { raw, base: tier.base, mult: tier.mult, valueComponent, valueRate: PRICING.VALUE_RATE, months: PRICING.MONTHS_FOR_VALUE }
+    };
   }
 
   async function listDealLineItems(dealId) {
-    // HubSpot v3 associations list
     return hsGet(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items?limit=100`);
   }
 
   async function associateDealToLineItem(dealId, lineItemId) {
-    // HubSpot v3 association create
     return hsPut(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/deal_to_line_item`);
+  }
+
+  // Safe patch: if portal rejects unknown properties, we retry with only safe standard ones
+  async function safePatchDeal(dealId, properties) {
+    const attempt1 = await hsPatch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties });
+    if (attempt1.ok) return { ok: true, attempted: properties, used: properties, res: attempt1 };
+
+    // If validation error with missing properties, remove them and retry once
+    const missing = new Set();
+    const errs = attempt1.json?.errors;
+    if (Array.isArray(errs)) {
+      for (const e of errs) {
+        const pname = e?.context?.propertyName?.[0];
+        if (pname) missing.add(String(pname));
+      }
+    }
+
+    // Always keep these (standard deal properties)
+    const SAFE_ALWAYS = new Set(["dealname", "amount"]);
+
+    const filtered = {};
+    for (const [k, v] of Object.entries(properties || {})) {
+      if (missing.has(k) && !SAFE_ALWAYS.has(k)) continue;
+      filtered[k] = v;
+    }
+
+    // If nothing changed, return original failure
+    const changed = Object.keys(filtered).length !== Object.keys(properties || {}).length;
+    if (!changed) return { ok: false, attempted: properties, used: properties, res: attempt1 };
+
+    const attempt2 = await hsPatch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties: filtered });
+    return { ok: attempt2.ok, attempted: properties, used: filtered, res: attempt2 };
+  }
+
+  async function patchLineItem(lineItemId, props) {
+    return hsPatch(`/crm/v3/objects/line_items/${encodeURIComponent(lineItemId)}`, { properties: props });
   }
 
   try {
@@ -105,68 +196,76 @@ export async function handler(event) {
       return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing deal_id" }) };
     }
 
-    // 1) If line item already associated, return it
+    // Pricing + naming
+    const pricing = computeLeadPrice(payload);
+    const redacted = buildRedactedLocation(payload) || "—";
+    const dealName = `Home Secure Lead — ${redacted}`;
+    const lineItemName = dealName;
+
+    // 1) Check associations
     const assoc = await listDealLineItems(deal_id);
     const existingIds =
       (assoc.ok && assoc.json && Array.isArray(assoc.json.results))
         ? assoc.json.results.map(r => String(r.id || "").trim()).filter(Boolean)
         : [];
 
-    if (existingIds.length) {
-      return {
-        statusCode: 200,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ ok: true, deal_id, line_item_id: existingIds[0], already_existed: true, all_line_item_ids: existingIds }),
-      };
-    }
+    let lineItemId = existingIds[0] || "";
 
-    // 2) Create a line item
-    const redacted = buildRedactedLocation(payload) || "Location";
-    const name = `Home Secure Lead — ${redacted}`;
+    // 2) Create line item if missing
+    if (!lineItemId) {
+      const created = await hsPost("/crm/v3/objects/line_items", {
+        properties: {
+          name: lineItemName,
+          quantity: "1",
+          price: String(pricing.leadPrice),
+          description: lead_id ? `Lead ID: ${lead_id} • Tier: ${pricing.tier} • Risk: ${pricing.riskScore}` : `Deal ID: ${deal_id}`,
+        }
+      });
 
-    // Choose a simple price: prefer payload.lead_price, else upfront, else 0
-    const price = safeNumber(payload.lead_price ?? payload.price ?? payload.hsc_upfront ?? payload.upfront ?? 0);
+      if (!created.ok || !created.json?.id) {
+        return {
+          statusCode: 500,
+          headers: corsHeaders(event.headers?.origin),
+          body: JSON.stringify({ error: "Line item create failed", detail: created.text, status: created.status }),
+        };
+      }
 
-    const created = await hsPost("/crm/v3/objects/line_items", {
-      properties: {
-        name,
+      lineItemId = String(created.json.id).trim();
+
+      // Associate it to deal
+      const linked = await associateDealToLineItem(deal_id, lineItemId);
+      if (!linked.ok) {
+        return {
+          statusCode: 500,
+          headers: corsHeaders(event.headers?.origin),
+          body: JSON.stringify({ error: "Line item association failed", deal_id, line_item_id: lineItemId, detail: linked.text, status: linked.status }),
+        };
+      }
+    } else {
+      // 3) If it exists, update its price/name to match new pricing (keeps totals consistent)
+      await patchLineItem(lineItemId, {
+        name: lineItemName,
         quantity: "1",
-        price: String(price),
-        // description is a standard property in many portals; if yours doesn't have it, HubSpot will reject ONLY if property doesn't exist.
-        // If you want to be ultra-safe, remove "description".
-        description: lead_id ? `Lead ID: ${lead_id}` : `Deal ID: ${deal_id}`,
-      }
-    });
-
-    if (!created.ok || !created.json?.id) {
-      return {
-        statusCode: 500,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Line item create failed", detail: created.text, status: created.status }),
-      };
+        price: String(pricing.leadPrice),
+      });
     }
 
-    const lineItemId = String(created.json.id).trim();
+    // 4) Update deal total to match lead price
+    const dealPatchProps = {
+      dealname: dealName,
+      amount: String(pricing.leadPrice),     // ✅ Deal total matches lead price
 
-    // 3) Associate it to the deal
-    const linked = await associateDealToLineItem(deal_id, lineItemId);
-    if (!linked.ok) {
-      return {
-        statusCode: 500,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Line item association failed", deal_id, line_item_id: lineItemId, detail: linked.text, status: linked.status }),
-      };
-    }
+      // Optional custom props (create these in HubSpot if you want them visible)
+      listing_status: "Unpaid",
+      lead_price: String(pricing.leadPrice),
+      pricing_tier: String(pricing.tier),
+      system_value: String(pricing.systemValue),
+      redacted_location: redacted,
+      line_item_id: lineItemId,
+      lead_id: lead_id || String(payload.lead_id || "").trim(),
+    };
 
-    // 4) Optional: update dealname + listing_status if those properties exist (ignore errors)
-    // NOTE: If properties don't exist, this patch will return validation error. We ignore it.
-    const patch = await hsPatch(`/crm/v3/objects/deals/${encodeURIComponent(deal_id)}`, {
-      properties: {
-        dealname: name,
-        listing_status: "Unpaid",
-        line_item_id: lineItemId,
-      }
-    });
+    const patched = await safePatchDeal(deal_id, dealPatchProps);
 
     return {
       statusCode: 200,
@@ -174,10 +273,12 @@ export async function handler(event) {
       body: JSON.stringify({
         ok: true,
         deal_id,
+        lead_id: lead_id || String(payload.lead_id || "").trim() || null,
         line_item_id: lineItemId,
-        already_existed: false,
-        deal_patch_ok: patch.ok,
-        deal_patch_status: patch.status,
+        already_existed: Boolean(existingIds.length),
+        deal_patch_ok: patched.ok,
+        deal_patch_used: patched.used,
+        pricing,
       }),
     };
 
