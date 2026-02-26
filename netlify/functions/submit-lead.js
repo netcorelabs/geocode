@@ -117,10 +117,10 @@ export async function handler(event) {
   try {
     const data = JSON.parse(event.body || "{}");
 
-    const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID;
-    const HUBSPOT_FORM_ID = process.env.HUBSPOT_FORM_ID;
+    const HSC_PORTAL_ID = process.env.HSC_PORTAL_ID;
+    const HSC_FORM_ID = process.env.HSC_FORM_ID;
 
-    if (!HUBSPOT_PORTAL_ID || !HUBSPOT_FORM_ID) {
+    if (!HSC_PORTAL_ID || !HSC_FORM_ID) {
       throw new Error("HubSpot IDs not set in environment variables");
     }
 
@@ -158,7 +158,7 @@ export async function handler(event) {
     };
 
     const res = await fetch(
-      `https://api.hsforms.com/submissions/v3/integration/submit/${HUBSPOT_PORTAL_ID}/${HUBSPOT_FORM_ID}`,
+      `https://api.hsforms.com/submissions/v3/integration/submit/${HSC_PORTAL_ID}/${HSC_FORM_ID}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
