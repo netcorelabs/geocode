@@ -3,8 +3,6 @@ export async function handler(event) {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
     "https://homesecurecalculator.com",
-    "http://www.homesecurecalculator.com",
-    "http://homesecurecalculator.com",
     "https://www.netcoreleads.com",
     "https://netcoreleads.com",
     "https://api.netcoreleads.com",
@@ -24,327 +22,369 @@ export async function handler(event) {
     };
   }
 
-  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
-  if (event.httpMethod !== "POST") return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
+  }
+
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: "Method Not Allowed" }),
+    };
+  }
 
   const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
-  if (!HS_TOKEN) return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
+  if (!HS_TOKEN) {
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }),
+    };
+  }
 
-  const FOLDER_ID = String(process.env.HUBSPOT_FILES_FOLDER_ID || "").trim();
-  const FOLDER_PATH = String(process.env.HUBSPOT_FILES_FOLDER_PATH || "").trim();
+  // ---------- IMPORTANT: choose EXACTLY ONE (folderId OR folderPath) ----------
+  const rawFolderId = String(process.env.HUBSPOT_FILES_FOLDER_ID || "").trim();
+  const rawFolderPath = String(process.env.HUBSPOT_FILES_FOLDER_PATH || "").trim();
+
+  const folderId = /^\d+$/.test(rawFolderId) ? rawFolderId : "";
+  const folderPath =
+    !folderId && rawFolderPath && rawFolderPath.toLowerCase() !== "false" ? rawFolderPath : "";
+
+  if (!folderId && !folderPath) {
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({
+        error: "Missing folder config",
+        detail: "Set HUBSPOT_FILES_FOLDER_ID (recommended) OR HUBSPOT_FILES_FOLDER_PATH (fallback).",
+        env_seen: {
+          HUBSPOT_FILES_FOLDER_ID: rawFolderId || null,
+          HUBSPOT_FILES_FOLDER_PATH: rawFolderPath || null,
+        },
+      }),
+    };
+  }
 
   const hsAuth = { Authorization: `Bearer ${HS_TOKEN}` };
 
-  async function readText(res) { try { return await res.text(); } catch { return ""; } }
+  async function readText(res) {
+    try {
+      return await res.text();
+    } catch {
+      return "";
+    }
+  }
+
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     const text = await readText(res);
     let json = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
     return { ok: res.ok, status: res.status, json, text };
   }
-  async function hsGet(path) {
-    return fetchJson(`https://api.hubapi.com${path}`, { method: "GET", headers: hsAuth });
-  }
-  async function hsPost(path, body) {
-    return fetchJson(`https://api.hubapi.com${path}`, { method: "POST", headers: { ...hsAuth, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  }
-  async function hsPatch(path, body) {
-    return fetchJson(`https://api.hubapi.com${path}`, { method: "PATCH", headers: { ...hsAuth, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  }
-  async function hsPut(path) {
-    return fetchJson(`https://api.hubapi.com${path}`, { method: "PUT", headers: hsAuth });
+
+  function stripDataUrl(b64) {
+    const s = String(b64 || "").trim();
+    if (!s) return "";
+    const idx = s.indexOf("base64,");
+    return idx >= 0 ? s.slice(idx + 7).trim() : s;
   }
 
-  // ---------- deal properties cache ----------
-  let _dealPropsCache = globalThis.__HSC_DEAL_PROPS_CACHE || null;
-  async function getDealPropertyNames() {
-    const now = Date.now();
-    if (_dealPropsCache && (now - _dealPropsCache.ts) < 5 * 60 * 1000) return _dealPropsCache.map;
-
-    const r = await hsGet("/crm/v3/properties/deals");
-    const arr = Array.isArray(r.json) ? r.json : (Array.isArray(r.json?.results) ? r.json.results : []);
-    const map = {};
-    for (const p of arr) if (p?.name) map[p.name] = true;
-    _dealPropsCache = { ts: now, map };
-    globalThis.__HSC_DEAL_PROPS_CACHE = _dealPropsCache;
-    return map;
+  function safeFileName(s) {
+    return String(s || "")
+      .replace(/[^a-z0-9_\-.]+/gi, "_")
+      .replace(/_+/g, "_")
+      .slice(0, 120);
   }
-  function onlyExistingProps(propMap, props) {
-    const out = {};
-    for (const [k, v] of Object.entries(props || {})) if (propMap[k]) out[k] = v;
+
+  function flatten(obj, prefix = "", out = {}) {
+    if (!obj || typeof obj !== "object") return out;
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === "object" && !Array.isArray(v)) flatten(v, key, out);
+      else out[key] = Array.isArray(v) ? JSON.stringify(v) : (v ?? "");
+    }
     return out;
   }
 
-  // ---------- associations cache ----------
-  let _assocCache = globalThis.__HSC_ASSOC_CACHE || {};
-  async function getAssociationTypeId(fromType, toType) {
-    const key = `${fromType}->${toType}`;
-    const now = Date.now();
-    const cached = _assocCache[key];
-    if (cached && (now - cached.ts) < 60 * 60 * 1000) return cached.id;
-
-    const r = await hsGet(`/crm/v4/associations/${encodeURIComponent(fromType)}/${encodeURIComponent(toType)}/labels`);
-    const results = Array.isArray(r.json?.results) ? r.json.results : [];
-    const pick = results.find(x => String(x?.category || "").toUpperCase() === "HUBSPOT_DEFINED") || results[0];
-    const id = pick?.typeId || pick?.associationTypeId || pick?.id;
-    if (!id) throw new Error(`Could not resolve associationTypeId for ${fromType} -> ${toType}`);
-
-    _assocCache[key] = { ts: now, id: Number(id) };
-    globalThis.__HSC_ASSOC_CACHE = _assocCache;
-    return Number(id);
-  }
-  async function associate(fromType, fromId, toType, toId) {
-    const typeId = await getAssociationTypeId(fromType, toType);
-    return hsPut(`/crm/v3/objects/${encodeURIComponent(fromType)}/${encodeURIComponent(fromId)}/associations/${encodeURIComponent(toType)}/${encodeURIComponent(toId)}/${typeId}`);
-  }
-
-  // ---------- helpers ----------
-  function safeStr(v) { return String(v ?? "").trim(); }
-  function safeNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-  function zip3xx(zip) {
-    const m = String(zip || "").match(/\b(\d{3})\d{2}\b/);
-    return m ? `${m[1]}xx` : "";
-  }
-
-  // tiny CSV parser for one header row + one data row (handles quoted commas)
-  function parseCsvLine(line) {
-    const out = [];
-    let cur = "";
-    let inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-        else inQ = !inQ;
-      } else if (ch === "," && !inQ) {
-        out.push(cur);
-        cur = "";
-      } else cur += ch;
+  function payloadToCsvDump(payload) {
+    const flat = flatten(payload || {});
+    const lines = ["key,value"];
+    for (const [k, v] of Object.entries(flat)) {
+      const kk = String(k).replace(/"/g, '""');
+      const vv = String(v).replace(/"/g, '""');
+      lines.push(`"${kk}","${vv}"`);
     }
-    out.push(cur);
-    return out.map(s => String(s ?? "").trim());
-  }
-  function extractFieldsFromCsv(csvText) {
-    const lines = String(csvText || "").split(/\r?\n/).filter(Boolean);
-    if (lines.length < 2) return {};
-    const header = parseCsvLine(lines[0]);
-    const row = parseCsvLine(lines[1]);
-    const map = {};
-    header.forEach((h, idx) => { map[h] = row[idx] ?? ""; });
-    return map;
+    return lines.join("\n");
   }
 
-  function computeLeadPrice({ riskScore, upfront, monthly, deviceCount }) {
-    const rs = safeNum(riskScore);
-    const tierMult = rs >= 70 ? 1.35 : rs >= 40 ? 1.10 : 0.90;
-    const selectionValue = (safeNum(upfront) * 0.02) + (safeNum(monthly) * 1.2) + (safeNum(deviceCount) * 1.0);
-    const base = 35;
-    let price = (base + selectionValue) * tierMult;
-    price = Math.round(price / 5) * 5;
-    price = Math.max(25, Math.min(250, price));
-    return price;
-  }
-
-  async function findDealByLeadId(leadId) {
-    const r = await hsPost("/crm/v3/objects/deals/search", {
-      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
-      properties: ["lead_id", "dealname", "amount", "deliverable_pdf_file_id", "deliverable_csv_file_id", "listing_status"],
-      limit: 1,
-    });
-    return (r.ok && r.json?.results?.[0]) ? r.json.results[0] : null;
-  }
-
-  async function readDealById(dealId) {
-    const r = await hsGet(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=lead_id,dealname,amount,deliverable_pdf_file_id,deliverable_csv_file_id,listing_status`);
-    return (r.ok && r.json?.id) ? r.json : null;
-  }
-
-  async function getFirstLineItemIdForDeal(dealId) {
-    const r = await hsGet(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items?limit=10`);
-    const results = Array.isArray(r.json?.results) ? r.json.results : [];
-    const first = results[0]?.id || results[0];
-    return first ? String(first) : "";
-  }
-
-  async function createOrUpdateLineItemForDeal({ dealId, lineItemName, price }) {
-    let lineItemId = await getFirstLineItemIdForDeal(dealId);
-
-    if (!lineItemId) {
-      const created = await hsPost("/crm/v3/objects/line_items", {
-        properties: { name: lineItemName, quantity: "1", price: String(price) },
-      });
-      if (!created.ok || !created.json?.id) throw new Error("Line item create failed: " + (created.text || "unknown"));
-      lineItemId = String(created.json.id);
-
-      const assoc = await associate("line_items", lineItemId, "deals", dealId);
-      if (!assoc.ok) throw new Error("Line item association failed: " + (assoc.text || "unknown"));
-    } else {
-      await hsPatch(`/crm/v3/objects/line_items/${encodeURIComponent(lineItemId)}`, {
-        properties: { name: lineItemName, quantity: "1", price: String(price) },
-      });
-    }
-    return lineItemId;
-  }
-
-  async function uploadFileToHubSpot({ blob, filename }) {
-    const qs = new URLSearchParams();
-    if (FOLDER_ID) qs.set("folderId", FOLDER_ID);
-    else if (FOLDER_PATH) qs.set("folderPath", FOLDER_PATH);
-
-    const url = "https://api.hubapi.com/files/v3/files" + (qs.toString() ? `?${qs}` : "");
-
-    const form = new FormData();
-
-    // IMPORTANT: HubSpot is picky — we send folderId/folderPath in multiple ways for robustness.
-    if (FOLDER_ID) form.append("folderId", FOLDER_ID);
-    if (FOLDER_PATH) form.append("folderPath", FOLDER_PATH);
-
-    form.append("options", JSON.stringify({
+  async function uploadFileToHubSpot({ bytes, filename, mimeType }) {
+    // IMPORTANT: Do NOT include folderId/folderPath inside options JSON.
+    // Provide them as separate multipart fields (and ONLY ONE of them).
+    const options = {
       access: "PRIVATE",
       overwrite: false,
       duplicateValidationStrategy: "NONE",
-    }));
+    };
 
-    form.append("file", blob, filename);
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: mimeType }), filename);
+    form.append("options", JSON.stringify(options));
 
-    const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${HS_TOKEN}` }, body: form });
-    const text = await res.text().catch(() => "");
-    let json = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-    return { ok: res.ok, status: res.status, json, text, url };
+    // EXACTLY ONE:
+    if (folderId) form.append("folderId", String(folderId));
+    else form.append("folderPath", String(folderPath));
+
+    const res = await fetchJson("https://api.hubapi.com/files/v3/files", {
+      method: "POST",
+      headers: { ...hsAuth }, // do NOT set Content-Type; fetch will set multipart boundary
+      body: form,
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `HubSpot file upload failed (${res.status}): ${res.text || JSON.stringify(res.json)}`
+      );
+    }
+
+    const fileId = String(res.json?.id || "").trim();
+    if (!fileId) {
+      throw new Error(`HubSpot upload missing file id: ${res.text || JSON.stringify(res.json)}`);
+    }
+    return { fileId, raw: res.json };
   }
 
-  function b64ToBlob(b64, mime) {
-    const buf = Buffer.from(String(b64 || ""), "base64");
-    return new Blob([buf], { type: mime });
+  async function createNoteWithAttachments({ dealId, leadId, fileIds }) {
+    const now = Date.now();
+    const body = {
+      properties: {
+        hs_timestamp: String(now),
+        hs_note_body:
+          `Deliverables generated for Lead ID ${leadId}.\n\n` +
+          `Attachments: ${fileIds.join(", ")}\n` +
+          `Folder: ${folderId ? `folderId=${folderId}` : `folderPath=${folderPath}`}`,
+        // HubSpot expects a JSON-string array in this property
+        hs_attachment_ids: JSON.stringify(fileIds),
+      },
+    };
+
+    const res = await fetchJson("https://api.hubapi.com/crm/v3/objects/notes", {
+      method: "POST",
+      headers: { ...hsAuth, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `Create note failed (${res.status}): ${res.text || JSON.stringify(res.json)}`
+      );
+    }
+    const noteId = String(res.json?.id || "").trim();
+    if (!noteId) throw new Error("Create note: missing note id");
+    return noteId;
+  }
+
+  async function getNoteDealAssociationTypeId() {
+    // Discover correct associationTypeId dynamically
+    const res = await fetchJson(
+      "https://api.hubapi.com/crm/v4/objects/notes/associations/deals/labels",
+      { method: "GET", headers: { ...hsAuth } }
+    );
+
+    if (!res.ok) {
+      throw new Error(
+        `Assoc labels lookup failed (${res.status}): ${res.text || JSON.stringify(res.json)}`
+      );
+    }
+
+    const results = res.json?.results || res.json || [];
+    const pick =
+      results.find((x) => (x.associationCategory || x.category) === "HUBSPOT_DEFINED") ||
+      results[0];
+
+    const typeId =
+      pick?.associationTypeId ?? pick?.typeId ?? pick?.id ?? null;
+
+    if (!typeId) throw new Error("Could not determine note→deal associationTypeId");
+    return Number(typeId);
+  }
+
+  async function associateNoteToDeal({ noteId, dealId, associationTypeId }) {
+    const url =
+      `https://api.hubapi.com/crm/v4/objects/notes/${encodeURIComponent(noteId)}` +
+      `/associations/deals/${encodeURIComponent(dealId)}/${encodeURIComponent(String(associationTypeId))}`;
+
+    const res = await fetchJson(url, { method: "PUT", headers: { ...hsAuth } });
+    if (!res.ok) {
+      throw new Error(
+        `Associate note→deal failed (${res.status}): ${res.text || JSON.stringify(res.json)}`
+      );
+    }
+    return true;
+  }
+
+  async function patchDealWithFallback(dealId, properties) {
+    const attempt = async (props) =>
+      fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, {
+        method: "PATCH",
+        headers: { ...hsAuth, "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: props }),
+      });
+
+    let r = await attempt(properties);
+    if (r.ok) return r;
+
+    // If HubSpot rejects unknown properties, remove them and retry.
+    const badProps = new Set(
+      (r.json?.errors || [])
+        .filter((e) => e.code === "PROPERTY_DOESNT_EXIST")
+        .flatMap((e) => e.context?.propertyName || [])
+    );
+
+    if (badProps.size) {
+      const filtered = Object.fromEntries(
+        Object.entries(properties).filter(([k]) => !badProps.has(k))
+      );
+      if (Object.keys(filtered).length) {
+        r = await attempt(filtered);
+        if (r.ok) return r;
+      }
+    }
+    return r;
   }
 
   try {
     const body = JSON.parse(event.body || "{}");
-    const lead_id = safeStr(body.lead_id);
-    const deal_id_in = safeStr(body.deal_id);
-    const pdf_base64 = safeStr(body.pdf_base64);
+
+    const lead_id = String(body.lead_id || "").trim();
+    const deal_id = String(body.deal_id || "").trim();
+    const pdf_base64 = stripDataUrl(body.pdf_base64);
     const csv_text = String(body.csv_text || "");
-    const csv_base64 = safeStr(body.csv_base64);
+    const payload = body.payload && typeof body.payload === "object" ? body.payload : null;
 
-    if (!lead_id && !deal_id_in) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing lead_id or deal_id" }) };
-    if (!pdf_base64) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing pdf_base64" }) };
-    if (!csv_text && !csv_base64) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing csv_text or csv_base64" }) };
-
-    // Resolve deal
-    let deal = null;
-    if (deal_id_in) deal = await readDealById(deal_id_in);
-    if (!deal && lead_id) deal = await findDealByLeadId(lead_id);
-
-    if (!deal?.id) return { statusCode: 404, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Deal not found", lead_id, deal_id: deal_id_in }) };
-
-    const dealId = String(deal.id);
-    const leadId = safeStr(deal.properties?.lead_id || lead_id);
-
-    // Upload files
-    const pdfBlob = b64ToBlob(pdf_base64, "application/pdf");
-    const csvBlob = csv_base64 ? b64ToBlob(csv_base64, "text/csv") : new Blob([csv_text], { type: "text/csv" });
-
-    const pdfFilename = `home-secure-report-${dealId}.pdf`;
-    const csvFilename = `home-secure-lead-${dealId}.csv`;
-
-    const pdfUp = await uploadFileToHubSpot({ blob: pdfBlob, filename: pdfFilename });
-    if (!pdfUp.ok || !pdfUp.json?.id) {
-      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "PDF upload failed", detail: pdfUp.text, upload_url: pdfUp.url, env_seen: { HUBSPOT_FILES_FOLDER_ID: FOLDER_ID, HUBSPOT_FILES_FOLDER_PATH: FOLDER_PATH } }) };
+    if (!lead_id || !deal_id) {
+      return {
+        statusCode: 400,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({ error: "Missing lead_id or deal_id" }),
+      };
+    }
+    if (!pdf_base64) {
+      return {
+        statusCode: 400,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({ error: "Missing pdf_base64" }),
+      };
+    }
+    if (!csv_text) {
+      return {
+        statusCode: 400,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({ error: "Missing csv_text" }),
+      };
     }
 
-    const csvUp = await uploadFileToHubSpot({ blob: csvBlob, filename: csvFilename });
-    if (!csvUp.ok || !csvUp.json?.id) {
-      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "CSV upload failed", detail: csvUp.text, upload_url: csvUp.url }) };
-    }
-
-    const pdfFileId = String(pdfUp.json.id);
-    const csvFileId = String(csvUp.json.id);
-
-    // Create NOTE with attachments
-    const nowMs = Date.now();
-    const noteBody =
-      `Deliverables uploaded for exclusive lead.\n` +
-      `Deal: ${dealId}\nLead: ${leadId}\n` +
-      `PDF fileId: ${pdfFileId}\nCSV fileId: ${csvFileId}\n` +
-      `Status: Deliverables Ready`;
-
-    const noteCreate = await hsPost("/crm/v3/objects/notes", {
-      properties: {
-        hs_timestamp: String(nowMs),
-        hs_note_body: noteBody,
-        // HubSpot expects a JSON string array here:
-        hs_attachment_ids: JSON.stringify([pdfFileId, csvFileId]),
-      },
+    // Optional: immediately mark processing (won’t break if property doesn't exist)
+    await patchDealWithFallback(deal_id, {
+      lead_status: "Deliverables Processing",
     });
 
-    if (!noteCreate.ok || !noteCreate.json?.id) {
-      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Note create failed", detail: noteCreate.text }) };
-    }
+    const pdfBytes = Buffer.from(pdf_base64, "base64");
+    const csvBytes = Buffer.from(csv_text, "utf8");
 
-    const noteId = String(noteCreate.json.id);
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const pdfName = safeFileName(`HomeSecure_Report_${lead_id}_${ts}.pdf`);
+    const csvName = safeFileName(`HomeSecure_Lead_${lead_id}_${ts}.csv`);
 
-    const assocNote = await associate("notes", noteId, "deals", dealId);
-    if (!assocNote.ok) {
-      return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Note association failed", detail: assocNote.text }) };
-    }
-
-    // Price update from CSV (risk score tier pricing)
-    const csvFields = extractFieldsFromCsv(csv_text || "");
-    const riskScore = safeNum(csvFields.hsc_risk_score);
-    const upfront = safeNum(csvFields.hsc_upfront);
-    const monthly = safeNum(csvFields.hsc_monthly);
-    const devicesStr = String(csvFields.hsc_devices || "");
-    const deviceCount = (devicesStr.match(/\bx(\d+)\b/g) || [])
-      .map(m => Number(m.replace(/[^\d]/g, "")))
-      .reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
-
-    const leadPrice = computeLeadPrice({ riskScore, upfront, monthly, deviceCount });
-
-    // Update deal properties (only if they exist)
-    const dealPropsMap = await getDealPropertyNames();
-    const patchProps = onlyExistingProps(dealPropsMap, {
-      deliverable_pdf_file_id: pdfFileId,
-      deliverable_csv_file_id: csvFileId,
-      listing_status: "Deliverables Ready",
-      amount: String(leadPrice),
+    // 1) Upload files to File Manager
+    const pdfUp = await uploadFileToHubSpot({
+      bytes: pdfBytes,
+      filename: pdfName,
+      mimeType: "application/pdf",
     });
 
-    if (Object.keys(patchProps).length) {
-      const patched = await hsPatch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties: patchProps });
-      if (!patched.ok) {
-        return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Deal update failed", detail: patched.text }) };
-      }
+    const csvUp = await uploadFileToHubSpot({
+      bytes: csvBytes,
+      filename: csvName,
+      mimeType: "text/csv",
+    });
+
+    const fileIds = [pdfUp.fileId, csvUp.fileId];
+
+    // 2) Create Note with attachments
+    const noteId = await createNoteWithAttachments({
+      dealId: deal_id,
+      leadId: lead_id,
+      fileIds,
+    });
+
+    // 3) Associate note with deal
+    const assocTypeId = await getNoteDealAssociationTypeId();
+    await associateNoteToDeal({ noteId, dealId: deal_id, associationTypeId: assocTypeId });
+
+    // 4) Update deal with file ids + payload dump into description
+    const descDump = payload ? payloadToCsvDump(payload) : "";
+    const dealPatch = await patchDealWithFallback(deal_id, {
+      deliverable_pdf_file_id: pdfUp.fileId,
+      deliverable_csv_file_id: csvUp.fileId,
+      lead_status: "Deliverables Ready",
+      description: descDump
+        ? `Lead Payload (flattened CSV)\n\n${descDump}\n\nAttached Note ID: ${noteId}\nPDF File ID: ${pdfUp.fileId}\nCSV File ID: ${csvUp.fileId}`
+        : `Attached Note ID: ${noteId}\nPDF File ID: ${pdfUp.fileId}\nCSV File ID: ${csvUp.fileId}`,
+    });
+
+    if (!dealPatch.ok) {
+      // Don’t fail deliverables if only patch fails; return warning
+      return {
+        statusCode: 200,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({
+          ok: true,
+          warning: "Deliverables uploaded and note attached, but deal patch had warnings.",
+          deal_patch_error: dealPatch.text || dealPatch.json || null,
+          deal_id,
+          lead_id,
+          pdf_file_id: pdfUp.fileId,
+          csv_file_id: csvUp.fileId,
+          note_id: noteId,
+          folder_used: folderId ? { folderId } : { folderPath },
+        }),
+      };
     }
 
-    // Ensure line item exists + matches deal amount
-    const city = safeStr(csvFields.city);
-    const state = safeStr(csvFields.state);
-    const zip = safeStr(csvFields.zip);
-    const redacted = (city || state) ? `${[city, state].filter(Boolean).join(", ")} ${zip3xx(zip)}`.trim() : "Unknown";
-    const lineItemName = `Exclusive Lead — ${redacted}`.trim();
-
-    const lineItemId = await createOrUpdateLineItemForDeal({ dealId, lineItemName, price: leadPrice });
-
-    // Return
     return {
       statusCode: 200,
       headers: corsHeaders(event.headers?.origin),
       body: JSON.stringify({
         ok: true,
-        lead_id: leadId,
-        deal_id: dealId,
-        line_item_id: lineItemId,
-        lead_price: leadPrice,
-        pdf_file_id: pdfFileId,
-        csv_file_id: csvFileId,
+        deal_id,
+        lead_id,
+        pdf_file_id: pdfUp.fileId,
+        csv_file_id: csvUp.fileId,
         note_id: noteId,
-        folder: { folderId: FOLDER_ID || null, folderPath: FOLDER_PATH || null },
+        associationTypeId: assocTypeId,
+        folder_used: folderId ? { folderId } : { folderPath },
       }),
     };
   } catch (err) {
     console.error("upload-deliverables error:", err);
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: String(err?.message || err) }) };
+    return {
+      statusCode: 500,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({
+        error: "PDF upload failed",
+        detail: String(err?.message || err),
+        env_seen: {
+          HUBSPOT_FILES_FOLDER_ID: rawFolderId || null,
+          HUBSPOT_FILES_FOLDER_PATH: rawFolderPath || null,
+        },
+        folder_choice: folderId ? "folderId" : "folderPath",
+      }),
+    };
   }
 }
