@@ -127,11 +127,11 @@ export async function handler(event) {
 
   function computeLeadTier(score) {
     const s = Math.max(0, Math.min(100, Math.round(safeNum(score))));
-    if (s >= 85) return { tier: "Premium", base: 129 };
-    if (s >= 70) return { tier: "High-Intent", base: 89 };
-    if (s >= 50) return { tier: "Qualified", base: 59 };
-    if (s >= 25) return { tier: "Standard", base: 39 };
-    return { tier: "Basic", base: 19 };
+    if (s >= 85) return { tier: "Premium", base: 200 };
+    if (s >= 70) return { tier: "High-Intent", base: 125 };
+    if (s >= 50) return { tier: "Qualified", base: 75 };
+    if (s >= 25) return { tier: "Standard", base: 50 };
+    return { tier: "Basic", base: 30 };
   }
 
   // Industry-style pricing:
