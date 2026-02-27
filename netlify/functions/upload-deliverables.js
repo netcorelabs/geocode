@@ -47,7 +47,8 @@ export async function handler(event) {
   const rawFolderPath = String(process.env.HUBSPOT_FILES_FOLDER_PATH || "").trim();
 
   const folderId = /^\d+$/.test(rawFolderId) ? rawFolderId : "";
-  const folderPath = !folderId && rawFolderPath && rawFolderPath.toLowerCase() !== "false" ? rawFolderPath : "";
+  const folderPath =
+    !folderId && rawFolderPath && rawFolderPath.toLowerCase() !== "false" ? rawFolderPath : "";
 
   if (!folderId && !folderPath) {
     return {
@@ -137,12 +138,17 @@ export async function handler(event) {
     return r;
   }
 
+  async function readDealProps(dealId) {
+    const r = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=deliverable_pdf_file_id,deliverable_csv_file_id,lead_status,description`,
+      { method: "GET", headers: { ...hsAuth } }
+    );
+    if (!r.ok) return null;
+    return r.json;
+  }
+
   async function uploadFileToHubSpot({ bytes, filename, mimeType }) {
-    const options = {
-      access: "PRIVATE",
-      overwrite: false,
-      duplicateValidationStrategy: "NONE",
-    };
+    const options = { access: "PRIVATE", overwrite: false, duplicateValidationStrategy: "NONE" };
 
     const form = new FormData();
     form.append("file", new Blob([bytes], { type: mimeType }), filename);
@@ -152,7 +158,7 @@ export async function handler(event) {
 
     const res = await fetchJson("https://api.hubapi.com/files/v3/files", {
       method: "POST",
-      headers: { ...hsAuth }, // DON'T set content-type for multipart
+      headers: { ...hsAuth }, // do NOT set Content-Type (boundary)
       body: form,
     });
 
@@ -165,44 +171,58 @@ export async function handler(event) {
     return { fileId, raw: res.json };
   }
 
-  async function createEngagementNoteWithAttachments({ dealId, leadId, fileIds }) {
-    // Engagements NOTE with attachments is the most reliable for file attachments
-    // Body format per engagements API docs.
+  async function createNoteWithAttachments({ leadId, fileIds }) {
     const now = Date.now();
-    const noteBody =
-      `Deliverables generated for Lead ID ${leadId}.\n\n` +
-      `Attached File IDs: ${fileIds.join(", ")}\n` +
-      `Folder: ${folderId ? `folderId=${folderId}` : `folderPath=${folderPath}`}`;
 
-    const body = {
-      engagement: {
-        active: true,
-        type: "NOTE",
-        timestamp: now,
-      },
-      associations: {
-        dealIds: [Number(dealId)],
-      },
-      metadata: {
-        body: noteBody,
-      },
-      attachments: fileIds.map((id) => ({ id: Number(id) })),
+    // ✅ IMPORTANT FIX:
+    // hs_attachment_ids must be a SEMICOLON-separated string, not JSON
+    // Example: "123;456"
+    const props = {
+      hs_timestamp: now,
+      hs_note_body:
+        `Deliverables generated for Lead ID ${leadId}.\n\n` +
+        `Attached file IDs: ${fileIds.join(", ")}\n` +
+        `Folder: ${folderId ? `folderId=${folderId}` : `folderPath=${folderPath}`}`,
+      hs_attachment_ids: fileIds.join(";"),
     };
 
-    const res = await fetchJson("https://api.hubapi.com/engagements/v1/engagements", {
+    const res = await fetchJson("https://api.hubapi.com/crm/v3/objects/notes", {
       method: "POST",
       headers: { ...hsAuth, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ properties: props }),
     });
 
-    if (!res.ok) {
-      throw new Error(`Create engagement note failed (${res.status}): ${res.text || JSON.stringify(res.json)}`);
+    if (!res.ok || !res.json?.id) {
+      throw new Error(`Create note failed (${res.status}): ${res.text || JSON.stringify(res.json)}`);
     }
 
-    const engagementId =
-      res.json?.engagement?.id ?? res.json?.engagement?.engagementId ?? res.json?.id ?? null;
+    return String(res.json.id);
+  }
 
-    return String(engagementId || "").trim();
+  async function getNoteDealAssociationTypeId() {
+    // Correct labels endpoint
+    const res = await fetchJson("https://api.hubapi.com/crm/v4/associations/notes/deals/labels", {
+      method: "GET",
+      headers: { ...hsAuth },
+    });
+
+    if (!res.ok) return null;
+
+    const results = res.json?.results || [];
+    const pick = results.find((x) => x.associationCategory === "HUBSPOT_DEFINED") || results[0];
+    return pick?.associationTypeId ? Number(pick.associationTypeId) : null;
+  }
+
+  async function associateNoteToDeal({ noteId, dealId, associationTypeId }) {
+    const url =
+      `https://api.hubapi.com/crm/v3/objects/notes/${encodeURIComponent(noteId)}` +
+      `/associations/deals/${encodeURIComponent(dealId)}/${encodeURIComponent(String(associationTypeId))}`;
+
+    const res = await fetchJson(url, { method: "PUT", headers: { ...hsAuth } });
+    if (!res.ok) {
+      throw new Error(`Associate note→deal failed (${res.status}): ${res.text || JSON.stringify(res.json)}`);
+    }
+    return true;
   }
 
   try {
@@ -215,28 +235,35 @@ export async function handler(event) {
     const payload = body.payload && typeof body.payload === "object" ? body.payload : null;
 
     if (!lead_id || !deal_id) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing lead_id or deal_id" }),
-      };
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing lead_id or deal_id" }) };
     }
     if (!pdf_base64) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing pdf_base64" }),
-      };
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing pdf_base64" }) };
     }
     if (!csv_text) {
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing csv_text" }) };
+    }
+
+    // If already uploaded (idempotent), return existing IDs
+    const deal = await readDealProps(deal_id);
+    const existingPdf = String(deal?.properties?.deliverable_pdf_file_id || "").trim();
+    const existingCsv = String(deal?.properties?.deliverable_csv_file_id || "").trim();
+    if (existingPdf && existingCsv) {
       return {
-        statusCode: 400,
+        statusCode: 200,
         headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing csv_text" }),
+        body: JSON.stringify({
+          ok: true,
+          reused: true,
+          deal_id,
+          lead_id,
+          pdf_file_id: existingPdf,
+          csv_file_id: existingCsv,
+          folder_used: folderId ? { folderId } : { folderPath },
+        }),
       };
     }
 
-    // mark processing (won’t break if property doesn't exist)
     await patchDealWithFallback(deal_id, { lead_status: "Deliverables Processing" });
 
     const pdfBytes = Buffer.from(pdf_base64, "base64");
@@ -249,44 +276,42 @@ export async function handler(event) {
     // 1) Upload files
     const pdfUp = await uploadFileToHubSpot({ bytes: pdfBytes, filename: pdfName, mimeType: "application/pdf" });
     const csvUp = await uploadFileToHubSpot({ bytes: csvBytes, filename: csvName, mimeType: "text/csv" });
+
     const fileIds = [pdfUp.fileId, csvUp.fileId];
 
-    // 2) Engagement NOTE with attachments + associated to deal
-    const engagementNoteId = await createEngagementNoteWithAttachments({
-      dealId: deal_id,
-      leadId: lead_id,
-      fileIds,
-    });
+    // 2) Create note with attachments (fixed)
+    let noteId = "";
+    let assocTypeId = null;
+    let assocOk = false;
+    let noteWarning = null;
 
-    // 3) Patch deal with file IDs and payload dump into description
+    try {
+      noteId = await createNoteWithAttachments({ leadId: lead_id, fileIds });
+      assocTypeId = await getNoteDealAssociationTypeId();
+      if (noteId && assocTypeId) {
+        await associateNoteToDeal({ noteId, dealId: deal_id, associationTypeId: assocTypeId });
+        assocOk = true;
+      } else {
+        noteWarning = "Note created, but could not determine note→deal associationTypeId (labels empty).";
+      }
+    } catch (e) {
+      // Don’t fail deliverables if note fails — files are uploaded already
+      noteWarning = String(e?.message || e);
+    }
+
+    // 3) Patch deal with file IDs + payload dump
     const descDump = payload ? payloadToCsvDump(payload) : "";
+    const desc =
+      (descDump ? `Lead Payload (flattened CSV)\n\n${descDump}\n\n` : "") +
+      `PDF File ID: ${pdfUp.fileId}\nCSV File ID: ${csvUp.fileId}\n` +
+      (noteId ? `Note ID: ${noteId}\n` : "");
 
-    const dealPatch = await patchDealWithFallback(deal_id, {
+    const patch = await patchDealWithFallback(deal_id, {
       deliverable_pdf_file_id: pdfUp.fileId,
       deliverable_csv_file_id: csvUp.fileId,
       lead_status: "Deliverables Ready",
-      description: descDump
-        ? `Lead Payload (flattened CSV)\n\n${descDump}\n\nEngagement Note ID: ${engagementNoteId}\nPDF File ID: ${pdfUp.fileId}\nCSV File ID: ${csvUp.fileId}`
-        : `Engagement Note ID: ${engagementNoteId}\nPDF File ID: ${pdfUp.fileId}\nCSV File ID: ${csvUp.fileId}`,
+      description: desc,
     });
-
-    if (!dealPatch.ok) {
-      return {
-        statusCode: 200,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({
-          ok: true,
-          warning: "Deliverables uploaded and note created, but deal patch had warnings.",
-          deal_patch_error: dealPatch.text || dealPatch.json || null,
-          deal_id,
-          lead_id,
-          pdf_file_id: pdfUp.fileId,
-          csv_file_id: csvUp.fileId,
-          engagement_note_id: engagementNoteId,
-          folder_used: folderId ? { folderId } : { folderPath },
-        }),
-      };
-    }
 
     return {
       statusCode: 200,
@@ -297,7 +322,12 @@ export async function handler(event) {
         lead_id,
         pdf_file_id: pdfUp.fileId,
         csv_file_id: csvUp.fileId,
-        engagement_note_id: engagementNoteId,
+        note_id: noteId || null,
+        note_associated: assocOk,
+        associationTypeId: assocTypeId,
+        deal_patch_ok: patch.ok,
+        deal_patch_status: patch.status,
+        warning: noteWarning,
         folder_used: folderId ? { folderId } : { folderPath },
       }),
     };
