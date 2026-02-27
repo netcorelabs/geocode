@@ -25,27 +25,18 @@ export async function handler(event) {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
   }
-
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: "Method Not Allowed" }),
-    };
+    return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
   }
 
   const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
   if (!HS_TOKEN) {
-    return {
-      statusCode: 500,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }),
-    };
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
   }
 
   const hsAuth = { Authorization: `Bearer ${HS_TOKEN}` };
 
-  async function readText(res) { try { return await res.text(); } catch { return ""; } }
+  async function readText(res){ try { return await res.text(); } catch { return ""; } }
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     const text = await readText(res);
@@ -54,9 +45,9 @@ export async function handler(event) {
     return { ok: res.ok, status: res.status, json, text };
   }
 
-  async function patchDealWithFallback(dealId, properties) {
+  async function patchWithFallback(objectType, objectId, properties) {
     const attempt = async (props) =>
-      fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, {
+      fetchJson(`https://api.hubapi.com/crm/v3/objects/${objectType}/${encodeURIComponent(objectId)}`, {
         method: "PATCH",
         headers: { ...hsAuth, "Content-Type": "application/json" },
         body: JSON.stringify({ properties: props }),
@@ -65,6 +56,7 @@ export async function handler(event) {
     let r = await attempt(properties);
     if (r.ok) return r;
 
+    // Strip unknown properties and retry (prevents PROPERTY_DOESNT_EXIST hard fails)
     const badProps = new Set(
       (r.json?.errors || [])
         .filter((e) => e.code === "PROPERTY_DOESNT_EXIST")
@@ -81,61 +73,115 @@ export async function handler(event) {
     return r;
   }
 
-  async function getDeal(dealId) {
-    return fetchJson(
-      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=dealname,amount,lead_id`,
-      { method: "GET", headers: { ...hsAuth } }
-    );
+  async function findContactIdByEmail(email) {
+    const e = String(email || "").trim().toLowerCase();
+    if (!e) return "";
+    const r = await fetchJson("https://api.hubapi.com/crm/v3/objects/contacts/search", {
+      method: "POST",
+      headers: { ...hsAuth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: e }] }],
+        properties: ["email"],
+        limit: 1,
+      }),
+    });
+    return r.ok && r.json?.results?.[0]?.id ? String(r.json.results[0].id) : "";
+  }
+
+  function zip3xx(zip) {
+    const m = String(zip || "").match(/\b(\d{3})\d{2}\b/);
+    return m ? `${m[1]}xx` : "";
+  }
+
+  function redactedLoc({ city, state, zip }) {
+    const c = String(city || "").trim();
+    const s = String(state || "").trim();
+    const z = zip3xx(zip);
+    const base = [c, s].filter(Boolean).join(", ");
+    return (base + (z ? ` ${z}` : "")).trim();
+  }
+
+  async function getAssocTypeIdDealsLineItems() {
+    // Correct labels endpoint (this is what your old code was missing)
+    const r = await fetchJson("https://api.hubapi.com/crm/v4/associations/deals/line_items/labels", {
+      method: "GET",
+      headers: { ...hsAuth },
+    });
+
+    if (r.ok) {
+      const results = r.json?.results || [];
+      const pick =
+        results.find(x => x.associationCategory === "HUBSPOT_DEFINED") ||
+        results[0];
+
+      const typeId = pick?.associationTypeId;
+      if (typeId) return Number(typeId);
+    }
+
+    // Fallback: HubSpot’s default deal<->line_item associationTypeId is commonly 20.
+    // If HubSpot ever changes it, the labels call above will still win.
+    return 20;
   }
 
   async function listDealLineItems(dealId) {
-    return fetchJson(
-      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items?limit=100`,
+    const r = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items?limit=10`,
       { method: "GET", headers: { ...hsAuth } }
     );
+    const ids = (r.json?.results || []).map(x => String(x.id));
+    return { ok: r.ok, ids, raw: r };
   }
 
-  async function createLineItem({ dealId, name, price, currency }) {
-    // HubSpot-defined Deal ↔ Line Item associationTypeId = 20
-    const associationTypeId = 20;
-
-    const body = {
-      properties: {
-        name: String(name || "Home Secure Lead"),
-        quantity: "1",
-        price: String(Number(price || 0)),
-        ...(currency ? { hs_currency_code: String(currency) } : {}),
-      },
-      associations: [
-        {
-          to: { id: String(dealId) },
-          types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId }],
-        },
-      ],
+  async function createLineItem({ name, price, currency }) {
+    // Minimal required props that work broadly
+    const props = {
+      name: String(name || "Home Secure Lead"),
+      price: String(Number(price || 0)),
+      quantity: "1",
+      hs_currency: String(currency || "USD"),
     };
 
-    return fetchJson("https://api.hubapi.com/crm/v3/objects/line_items", {
+    const r = await fetchJson("https://api.hubapi.com/crm/v3/objects/line_items", {
       method: "POST",
-      headers: { ...hsAuth, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  async function patchLineItem(lineItemId, props) {
-    return fetchJson(`https://api.hubapi.com/crm/v3/objects/line_items/${encodeURIComponent(lineItemId)}`, {
-      method: "PATCH",
       headers: { ...hsAuth, "Content-Type": "application/json" },
       body: JSON.stringify({ properties: props }),
     });
+
+    if (!r.ok || !r.json?.id) {
+      throw new Error(`Create line item failed (${r.status}): ${r.text || JSON.stringify(r.json)}`);
+    }
+    return String(r.json.id);
   }
 
-  async function ensureDefaultAssociation(lineItemId, dealId) {
-    // “default” association doesn’t require type id
-    const url =
-      `https://api.hubapi.com/crm/v4/objects/line_items/${encodeURIComponent(lineItemId)}` +
-      `/associations/default/deals/${encodeURIComponent(dealId)}`;
+  async function updateLineItem(lineItemId, { name, price, currency }) {
+    const props = {
+      name: String(name || "Home Secure Lead"),
+      price: String(Number(price || 0)),
+      quantity: "1",
+      hs_currency: String(currency || "USD"),
+    };
+    const r = await patchWithFallback("line_items", lineItemId, props);
+    if (!r.ok) throw new Error(`Update line item failed (${r.status}): ${r.text || JSON.stringify(r.json)}`);
+    return true;
+  }
 
-    return fetchJson(url, { method: "PUT", headers: { ...hsAuth } });
+  async function associateDealToLineItem(dealId, lineItemId, associationTypeId) {
+    const url =
+      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}` +
+      `/associations/line_items/${encodeURIComponent(lineItemId)}/${encodeURIComponent(String(associationTypeId))}`;
+
+    const r = await fetchJson(url, { method: "PUT", headers: { ...hsAuth } });
+    if (!r.ok) throw new Error(`Associate deal→line_item failed (${r.status}): ${r.text || JSON.stringify(r.json)}`);
+    return true;
+  }
+
+  async function readDeal(dealId) {
+    const r = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=dealname,amount,lead_id,hs_object_id`,
+      { method: "GET", headers: { ...hsAuth } }
+    );
+    if (!r.ok) return null;
+    return r.json;
   }
 
   try {
@@ -143,89 +189,64 @@ export async function handler(event) {
 
     const deal_id = String(body.deal_id || "").trim();
     const lead_id = String(body.lead_id || "").trim();
-    const lead_price = Number(body.lead_price || 0);
-    const currency = String(body.currency || "USD").trim();
-    const line_item_name = String(body.line_item_name || "").trim() || "Home Secure Lead";
-    const dealname_suggested = String(body.dealname_suggested || "").trim();
+    const email   = String(body.email || "").trim();
+    const city    = String(body.city || "").trim();
+    const state   = String(body.state || body.state_code || "").trim();
+    const zip     = String(body.zip || body.postal_code || "").trim();
 
-    if (!deal_id) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing deal_id" }),
-      };
+    const lead_price = Number(body.lead_price || 0);
+    const currency   = String(body.currency || "USD").trim() || "USD";
+    const line_item_name = String(body.line_item_name || "").trim();
+
+    if (!deal_id || !lead_id) {
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing deal_id or lead_id" }) };
     }
     if (!Number.isFinite(lead_price) || lead_price <= 0) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing/invalid lead_price" }),
-      };
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing/invalid lead_price" }) };
     }
 
-    // Find existing line item linked to deal
-    const assoc = await listDealLineItems(deal_id);
-    let lineItemId = assoc.ok ? String(assoc.json?.results?.[0]?.id || "").trim() : "";
+    // Build a unique, vendor-readable deal name with Contact ID
+    const contactId = await findContactIdByEmail(email);
+    const loc = redactedLoc({ city, state, zip }) || "Lead";
+    const dealnameDesired = `Home Secure Lead — ${loc} — C${contactId || "NA"}`;
+
+    // 1) Find or create a line item on the deal
+    const assocTypeId = await getAssocTypeIdDealsLineItems();
+
+    const liList = await listDealLineItems(deal_id);
+    let lineItemId = liList.ids?.[0] || "";
 
     if (!lineItemId) {
-      const created = await createLineItem({ dealId: deal_id, name: line_item_name, price: lead_price, currency });
-      if (!created.ok || !created.json?.id) {
-        return {
-          statusCode: 500,
-          headers: corsHeaders(event.headers?.origin),
-          body: JSON.stringify({
-            error: "ensure-line-item failed",
-            detail: `Create line item failed (${created.status}): ${created.text || JSON.stringify(created.json)}`,
-          }),
-        };
-      }
-      lineItemId = String(created.json.id).trim();
-    } else {
-      // Update existing LI values
-      const upd = await patchLineItem(lineItemId, {
-        name: line_item_name,
-        quantity: "1",
-        price: String(lead_price),
-        ...(currency ? { hs_currency_code: String(currency) } : {}),
+      lineItemId = await createLineItem({
+        name: line_item_name || dealnameDesired,
+        price: lead_price,
+        currency,
       });
-      if (!upd.ok) {
-        // keep going; association might still be fine
-      }
+      await associateDealToLineItem(deal_id, lineItemId, assocTypeId);
+    } else {
+      await updateLineItem(lineItemId, {
+        name: line_item_name || dealnameDesired,
+        price: lead_price,
+        currency,
+      });
     }
 
-    // Ensure the default association exists (safe/idempotent)
-    await ensureDefaultAssociation(lineItemId, deal_id);
+    // 2) Patch deal amount + dealname + status fields (fallback-safe)
+    const deal = await readDeal(deal_id);
+    const currentName = String(deal?.properties?.dealname || "");
+    const shouldPatchName =
+      !currentName ||
+      /location/i.test(currentName) ||
+      (contactId && !currentName.includes(`C${contactId}`));
 
-    // Patch deal amount + optional name patch if it contains "Location"
-    const deal = await getDeal(deal_id);
-    const curName = String(deal.json?.properties?.dealname || "");
-    const nameContainsLocation = /location/i.test(curName);
-
-    const dealPatchProps = {
-      amount: String(lead_price),
-      ...(lead_id ? { lead_id: lead_id } : {}),
+    const dealProps = {
+      amount: String(Math.round(lead_price)),
+      lead_price: String(Math.round(lead_price)),             // ok if custom prop exists
+      lead_status: "Deliverables Processing",                 // ok if custom prop exists
     };
+    if (shouldPatchName) dealProps.dealname = dealnameDesired;
 
-    if (dealname_suggested && nameContainsLocation) {
-      dealPatchProps.dealname = dealname_suggested;
-    }
-
-    const dealPatch = await patchDealWithFallback(deal_id, dealPatchProps);
-
-    if (!dealPatch.ok) {
-      return {
-        statusCode: 200,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({
-          ok: true,
-          warning: "Line item created/updated, but deal patch had warnings.",
-          deal_patch_error: dealPatch.text || dealPatch.json || null,
-          deal_id,
-          line_item_id: lineItemId,
-          lead_price,
-        }),
-      };
-    }
+    await patchWithFallback("deals", deal_id, dealProps);
 
     return {
       statusCode: 200,
@@ -233,9 +254,12 @@ export async function handler(event) {
       body: JSON.stringify({
         ok: true,
         deal_id,
+        lead_id,
+        contact_id: contactId || null,
+        associationTypeId: assocTypeId,
         line_item_id: lineItemId,
-        lead_price,
-        currency,
+        dealname: shouldPatchName ? dealnameDesired : currentName,
+        amount: Math.round(lead_price),
       }),
     };
   } catch (err) {
@@ -243,7 +267,10 @@ export async function handler(event) {
     return {
       statusCode: 500,
       headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: "ensure-line-item failed", detail: String(err?.message || err) }),
+      body: JSON.stringify({
+        error: "ensure-line-item failed",
+        detail: String(err?.message || err),
+      }),
     };
   }
 }
