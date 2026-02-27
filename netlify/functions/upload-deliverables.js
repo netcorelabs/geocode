@@ -89,14 +89,30 @@ return i>-1?s.slice(i+7):s;
 }
 
 async function uploadFileToHubSpot({ bytes, filename, mimeType }) {
-const form=new FormData();
-form.append("file", new Blob([bytes],{type:mimeType}), filename);
-form.append("options", JSON.stringify({ access:"PRIVATE" }));
-if(folderId) form.append("folderId",String(folderId));
-else form.append("folderPath",String(folderPath));
 
-const res=await fetchJson("https://api.hubapi.com/files/v3/files",{ method:"POST", headers:{...hsAuth}, body:form });
-if(!res.ok) throw new Error("Upload failed");
+const form = new FormData();
+
+form.append("file", bytes, {
+filename,
+contentType: mimeType
+});
+
+form.append("options", JSON.stringify({ access:"PRIVATE" }));
+
+if(folderId) form.append("folderId", String(folderId));
+else form.append("folderPath", String(folderPath));
+
+const res = await fetchJson("https://api.hubapi.com/files/v3/files",{
+method:"POST",
+headers:{ ...hsAuth },
+body:form
+});
+
+if(!res.ok){
+console.error("HubSpot upload error:", res.status, res.text || res.json);
+throw new Error("Upload failed");
+}
+
 return { fileId:res.json.id };
 }
 
