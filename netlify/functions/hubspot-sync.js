@@ -1,64 +1,56 @@
 // netlify/functions/hubspot-sync.js
-import fetch from "node-fetch";
-import crypto from "crypto";
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "https://www.homesecurecalculator.com",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS"
-};
-
 export async function handler(event) {
 
-  /* ✅ HANDLE PREFLIGHT */
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers: CORS_HEADERS, body: "ok" };
-  }
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS"
+  };
+
+  /* ✅ PREFLIGHT */
+  if (event.httpMethod === "OPTIONS")
+    return { statusCode: 200, headers, body: "ok" };
 
   try {
 
-    const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
+    const HS_TOKEN = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
     if (!HS_TOKEN)
-      return { statusCode: 500, headers: CORS_HEADERS, body: JSON.stringify({ error: "Missing HS token" }) };
+      return { statusCode: 500, headers, body: JSON.stringify({ error: "Missing HS token" }) };
+
+    const body = JSON.parse(event.body || "{}");
+    const payload = body.payload || {};
+    const email = payload.email;
+
+    if (!email)
+      return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing email" }) };
+
+    const lead_id = payload.lead_id || Date.now().toString();
 
     const hsAuth = {
       Authorization: `Bearer ${HS_TOKEN}`,
       "Content-Type": "application/json"
     };
 
-    let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch (e) {}
-
-    const payload = body.payload || {};
-    const email = String(payload.email || "").trim();
-
-    if (!email)
-      return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: "Missing payload.email" }) };
-
-    let lead_id = String(payload.lead_id || "");
-    if (!lead_id) lead_id = crypto.randomUUID();
-
-    /* ⭐ SEARCH DEAL BY EMAIL */
+    /* ⭐ SEARCH */
     const searchRes = await fetch("https://api.hubapi.com/crm/v3/objects/deals/search", {
       method: "POST",
       headers: hsAuth,
       body: JSON.stringify({
-        filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
-        properties: ["dealname"]
+        filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }]
       })
     });
 
     const searchJson = await searchRes.json();
-    let dealId = searchJson.results?.[0]?.id || null;
+    let dealId = searchJson.results?.[0]?.id;
 
-    /* ⭐ CREATE DEAL IF NOT FOUND */
+    /* ⭐ CREATE */
     if (!dealId) {
       const createRes = await fetch("https://api.hubapi.com/crm/v3/objects/deals", {
         method: "POST",
         headers: hsAuth,
         body: JSON.stringify({
           properties: {
-            dealname: `HSC Lead ${payload.firstname || ""} ${payload.lastname || ""} (${payload.time_line || ""} ${payload.home_ownership || ""})`,
+            dealname: `HSC ${payload.time_line || ""} ${payload.home_ownership || ""}`,
             email,
             lead_id
           }
@@ -71,16 +63,16 @@ export async function handler(event) {
 
     return {
       statusCode: 200,
-      headers: CORS_HEADERS,
-      body: JSON.stringify({ ok: true, lead_id, deal_id: dealId })
+      headers,
+      body: JSON.stringify({ ok: true, deal_id: dealId, lead_id })
     };
 
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
     return {
       statusCode: 500,
-      headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "Server error", details: err.message })
+      headers,
+      body: JSON.stringify({ error: e.message })
     };
   }
 }
