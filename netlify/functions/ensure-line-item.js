@@ -1,132 +1,157 @@
-export async function handler(event){
+exports.handler = async (event) => {
+  try {
+    const HUBSPOT_TOKEN = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+    if (!HUBSPOT_TOKEN) {
+      return response(500, { error: "Missing HubSpot token" });
+    }
 
-if(event.httpMethod !== "POST"){
+    const body = JSON.parse(event.body || "{}");
+    const { email, firstname, lastname, phone } = body;
 
-return{
+    if (!email) {
+      return response(400, { error: "Email required" });
+    }
 
-statusCode:405,
-body:"POST required"
+    /* =========================
+       1️⃣  FIND OR CREATE CONTACT
+    ==========================*/
 
+    let contactId = await findContactByEmail(email, HUBSPOT_TOKEN);
+
+    if (!contactId) {
+      contactId = await createContact({
+        email,
+        firstname,
+        lastname,
+        phone
+      }, HUBSPOT_TOKEN);
+    }
+
+    /* =========================
+       2️⃣  CHECK FOR OPEN DEAL
+    ==========================*/
+
+    let dealId = await findOpenDeal(contactId, HUBSPOT_TOKEN);
+
+    /* =========================
+       3️⃣  CREATE DEAL IF NONE
+    ==========================*/
+
+    if (!dealId) {
+      dealId = await createDeal({
+        dealname: `${firstname || ""} ${lastname || ""} - Security Estimate`,
+        pipeline: "default",
+        dealstage: "appointmentscheduled" // change to your first stage
+      }, HUBSPOT_TOKEN);
+
+      await associateContactToDeal(contactId, dealId, HUBSPOT_TOKEN);
+    }
+
+    return response(200, { success: true, dealId });
+
+  } catch (err) {
+    return response(500, { error: err.message });
+  }
 };
 
-}
 
-const TOKEN =
-process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+/* ============================================================
+   HELPERS
+============================================================ */
 
-if(!TOKEN){
-
-return{
-
-statusCode:500,
-body:"Missing token"
-
-};
-
-}
-
-try{
-
-const body =
-JSON.parse(event.body);
-
-if(!body.lead_id){
-
-throw new Error(
-"Missing lead_id"
-);
-
-}
-
-
-// ---------- CREATE DEAL ----------
-
-const response =
-await fetch(
-
-"https://api.hubapi.com/crm/v3/objects/deals",
-
-{
-
-method:"POST",
-
-headers:{
-
-Authorization:
-`Bearer ${TOKEN}`,
-
-"Content-Type":
-"application/json"
-
-},
-
-body:JSON.stringify({
-
-properties:{
-
-dealname:
-body.deal_name,
-
-amount:
-body.deal_amount,
-
-pipeline:
-body.pipeline,
-
-dealstage:
-body.stage,
-
-closedate:
-body.close_date,
-
-dealtype:
-body.deal_type,
-
-lead_id:
-body.lead_id
-
-}
-
-})
-
+const headers = (token) => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json"
 });
 
-const text =
-await response.text();
-
-if(!response.ok){
-
-throw new Error(text);
-
+function response(status, body) {
+  return {
+    statusCode: status,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  };
 }
 
-const result =
-JSON.parse(text);
+/* ========================= FIND CONTACT ========================= */
 
-return{
+async function findContactByEmail(email, token) {
+  const r = await fetch(
+    "https://api.hubapi.com/crm/v3/objects/contacts/search",
+    {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({
+        filterGroups: [{
+          filters: [{
+            propertyName: "email",
+            operator: "EQ",
+            value: email
+          }]
+        }]
+      })
+    }
+  );
 
-statusCode:200,
-
-body:JSON.stringify({
-
-deal_id:result.id
-
-})
-
-};
-
-}catch(e){
-
-return{
-
-statusCode:500,
-
-body:e.message
-
-};
-
+  const data = await r.json();
+  return data.results?.[0]?.id || null;
 }
 
+/* ========================= CREATE CONTACT ========================= */
+
+async function createContact(props, token) {
+  const r = await fetch(
+    "https://api.hubapi.com/crm/v3/objects/contacts",
+    {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({ properties: props })
+    }
+  );
+
+  const data = await r.json();
+  return data.id;
 }
 
+/* ========================= FIND OPEN DEAL ========================= */
 
+async function findOpenDeal(contactId, token) {
+  const r = await fetch(
+    `https://api.hubapi.com/crm/v4/objects/contacts/${contactId}/associations/deals`,
+    {
+      headers: headers(token)
+    }
+  );
+
+  const data = await r.json();
+  if (!data.results?.length) return null;
+
+  return data.results[0].toObjectId;
+}
+
+/* ========================= CREATE DEAL ========================= */
+
+async function createDeal(props, token) {
+  const r = await fetch(
+    "https://api.hubapi.com/crm/v3/objects/deals",
+    {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({ properties: props })
+    }
+  );
+
+  const data = await r.json();
+  return data.id;
+}
+
+/* ========================= ASSOCIATE ========================= */
+
+async function associateContactToDeal(contactId, dealId, token) {
+  await fetch(
+    `https://api.hubapi.com/crm/v4/objects/deals/${dealId}/associations/contacts/${contactId}/deal_to_contact`,
+    {
+      method: "PUT",
+      headers: headers(token)
+    }
+  );
+}
