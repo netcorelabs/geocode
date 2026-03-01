@@ -3,7 +3,7 @@
 export async function handler(event, context) {
   try {
     // Read the key from an environment variable (never hardcode in code)
-    const key = process.env.GOOGLE_MAPS_KEY;
+    const key = process.env.GOOGLE_API_KEY;
 
     if (!key) {
       return {
