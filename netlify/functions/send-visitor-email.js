@@ -1,15 +1,28 @@
 // netlify/functions/send-visitor-email.js
+// Sends visitor an email with their PDF link.
+// NOTE: This uses HubSpot Transactional Single Send API, which requires Transactional Email add-on
+// and a configured transactional email (emailId).
+//
+// Env:
+//   HUBSPOT_PRIVATE_APP_TOKEN (required)
+//   HUBSPOT_TRANSACTIONAL_EMAIL_ID (required to send)
+//
+// If you don't have transactional email, this will return a helpful error and the UI should fall back to mailto.
+
 export async function handler(event) {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
     "https://homesecurecalculator.com",
+    "http://www.homesecurecalculator.com",
+    "http://homesecurecalculator.com",
     "https://www.netcoreleads.com",
     "https://netcoreleads.com",
     "https://api.netcoreleads.com",
+    "https://hubspotgate.netlify.app",
   ];
 
   function corsHeaders(originRaw) {
-    const origin = String(originRaw || "").trim();
+    const origin = (originRaw || "").trim();
     const allowOrigin = origin ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0]) : "*";
     return {
       "Access-Control-Allow-Origin": allowOrigin,
@@ -21,124 +34,83 @@ export async function handler(event) {
     };
   }
 
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
-  }
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
+  if (event.httpMethod !== "POST") return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
 
   const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
-  const PORTAL_ID = String(process.env.HUBSPOT_PORTAL_ID || "").trim();
-
-  // Default to the form GUID you’ve been using (change any time via env)
-  const DEFAULT_FORM_ID = "1988f31c-3916-48a8-aa87-d8aae8a217e2";
-  const FORM_ID = String(process.env.HUBSPOT_VISITOR_EMAIL_FORM_ID || DEFAULT_FORM_ID).trim();
-
-  if (!PORTAL_ID) {
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PORTAL_ID" }) };
-  }
-  if (!HS_TOKEN) {
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
-  }
-
-  const hsAuth = { Authorization: `Bearer ${HS_TOKEN}` };
-  async function readText(r){ try{ return await r.text(); } catch { return ""; } }
-  async function fetchJson(url, options){
-    const r = await fetch(url, options);
-    const t = await readText(r);
-    let j=null; try{ j=t?JSON.parse(t):null; }catch(e){ j=null; }
-    return { ok:r.ok, status:r.status, json:j, text:t };
+  const EMAIL_ID = String(process.env.HUBSPOT_TRANSACTIONAL_EMAIL_ID || "").trim();
+  if (!HS_TOKEN) return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
+  if (!EMAIL_ID) {
+    return {
+      statusCode: 501,
+      headers: corsHeaders(event.headers?.origin),
+      body: JSON.stringify({
+        error: "Transactional email not configured",
+        detail: "Set HUBSPOT_TRANSACTIONAL_EMAIL_ID env var (requires HubSpot Transactional Email add-on).",
+      }),
+    };
   }
 
-  async function hsPatchDeal(dealId, properties){
-    return fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, {
-      method:"PATCH",
-      headers:{ ...hsAuth, "Content-Type":"application/json" },
-      body: JSON.stringify({ properties })
-    });
+  async function readText(res) { try { return await res.text(); } catch { return ""; } }
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    const text = await readText(res);
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    return { ok: res.ok, status: res.status, json, text };
   }
 
-  // Patch with fallback (ignore unknown deal properties)
-  async function patchDealWithFallback(dealId, properties){
-    const attempt = async (props)=>hsPatchDeal(dealId, props);
-    let r = await attempt(properties);
-    if (r.ok) return r;
-
-    const badProps = new Set(
-      (r.json?.errors || [])
-        .filter(e => e.code === "PROPERTY_DOESNT_EXIST")
-        .flatMap(e => e.context?.propertyName || [])
-    );
-    if (badProps.size) {
-      const filtered = Object.fromEntries(Object.entries(properties).filter(([k]) => !badProps.has(k)));
-      if (Object.keys(filtered).length) {
-        r = await attempt(filtered);
-        if (r.ok) return r;
-      }
-    }
-    return r;
-  }
-
-  try{
+  try {
     const body = JSON.parse(event.body || "{}");
-    const deal_id = String(body.deal_id || "").trim();
-    const lead_id = String(body.lead_id || "").trim();
-    const email = String(body.email || "").trim();
+
+    const to = String(body.to || body.email || "").trim();
+    const firstname = String(body.firstname || "").trim();
+    const lastname  = String(body.lastname || "").trim();
+
     const pdf_url = String(body.pdf_url || "").trim();
     const csv_url = String(body.csv_url || "").trim();
 
-    if (!email) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing email" }) };
-    if (!deal_id) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing deal_id" }) };
+    const lead_id = String(body.lead_id || "").trim();
+    const deal_id = String(body.deal_id || "").trim();
+
+    if (!to) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing to/email" }) };
     if (!pdf_url) return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing pdf_url" }) };
 
-    // 1) Submit to HubSpot Form (workflow should send email)
-    const submitUrl = `https://api.hsforms.com/submissions/v3/integration/submit/${encodeURIComponent(PORTAL_ID)}/${encodeURIComponent(FORM_ID)}`;
-
-    const fields = [
-      { name: "email", value: email },
-      { name: "lead_id", value: lead_id },
-      { name: "deal_id", value: deal_id },
-      { name: "hsc_pdf_url", value: pdf_url },
-      { name: "hsc_csv_url", value: csv_url },
-    ];
-
-    const submit = await fetchJson(submitUrl, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
+    const r = await fetchJson("https://api.hubapi.com/marketing/v3/transactional/single-email/send", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        fields,
-        context: { pageUri: body.page_url || "", pageName: body.page_name || "HSRESULTS" }
-      })
+        emailId: Number(EMAIL_ID),
+        message: { to },
+        contactProperties: {
+          email: to,
+          ...(firstname ? { firstname } : {}),
+          ...(lastname ? { lastname } : {}),
+        },
+        customProperties: {
+          pdf_url,
+          ...(csv_url ? { csv_url } : {}),
+          ...(lead_id ? { lead_id } : {}),
+          ...(deal_id ? { deal_id } : {}),
+        },
+      }),
     });
 
-    // 2) Store links + emailed timestamp on deal (best-effort)
-    const nowIso = new Date().toISOString();
-    await patchDealWithFallback(deal_id, {
-      deliverable_pdf_url: pdf_url,
-      deliverable_csv_url: csv_url,
-      lead_status: submit.ok ? "Visitor Emailed" : "Visitor Email Attempted",
-      visitor_emailed_at: nowIso
-    });
+    if (!r.ok) {
+      return {
+        statusCode: 502,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({
+          error: "HubSpot email send failed",
+          status: r.status,
+          detail: r.text || JSON.stringify(r.json),
+        }),
+      };
+    }
 
-    return {
-      statusCode: 200,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({
-        ok: true,
-        deal_id,
-        lead_id,
-        email,
-        pdf_url,
-        csv_url,
-        hubspot_form_ok: submit.ok,
-        hubspot_form_status: submit.status,
-        hubspot_form_response: submit.ok ? submit.json : submit.text
-      })
-    };
-
-  } catch(err){
+    return { statusCode: 200, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ ok: true }) };
+  } catch (err) {
     console.error("send-visitor-email error:", err);
-    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "send-visitor-email failed", detail: String(err?.message || err) }) };
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: String(err?.message || err) }) };
   }
 }
