@@ -1,18 +1,35 @@
 // netlify/functions/hubspot-sync.js
 export async function handler(event) {
+  /* ==========================================
+     HUBSPOT-SYNC (FULL DROP-IN)
+     Goal: Create/Update Deal + Create Line Item
+           Attempt association but NEVER fail request
+           (Fixes: Associate deal→line_item 400 errors)
+
+     Expected inputs (from HSRESULTS):
+       { email, lead_id, dealname, line_item_name, lead_price, currency }
+
+     Output:
+       { ok:true, deal_id, line_item_id, association_ok, association_error }
+
+     NOTE:
+       - This function is designed so HSRESULTS never sees a 500
+         due to association issues.
+  ========================================== */
+
   // ----------------------------
   // CORS
   // ----------------------------
   const allowedOrigins = [
+    "https://api.netcoreleads.com",
     "https://www.homesecurecalculator.com",
     "https://homesecurecalculator.com",
     "https://www.netcoreleads.com",
-    "https://netcoreleads.com",
-    "https://api.netcoreleads.com",
+    "https://netcoreleads.com"
   ];
 
   function corsHeaders(originRaw) {
-    const origin = (originRaw || "").trim();
+    const origin = String(originRaw || "").trim();
     const allowOrigin = origin
       ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0])
       : "*";
@@ -54,7 +71,7 @@ export async function handler(event) {
     "Content-Type": "application/json",
   };
 
-  async function readText(res) { try { return await res.text(); } catch { return ""; } }
+  async function readText(res){ try{ return await res.text(); }catch{ return ""; } }
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     const text = await readText(res);
@@ -64,25 +81,24 @@ export async function handler(event) {
   }
 
   const HS = {
-    get: (path) => fetchJson(`https://api.hubapi.com${path}`, { method: "GET", headers: hsHeaders }),
-    post: (path, body) => fetchJson(`https://api.hubapi.com${path}`, { method: "POST", headers: hsHeaders, body: JSON.stringify(body) }),
-    patch: (path, body) => fetchJson(`https://api.hubapi.com${path}`, { method: "PATCH", headers: hsHeaders, body: JSON.stringify(body) }),
-    put: (path) => fetchJson(`https://api.hubapi.com${path}`, { method: "PUT", headers: hsHeaders }),
+    get:  (path)        => fetchJson(`https://api.hubapi.com${path}`, { method:"GET", headers: hsHeaders }),
+    post: (path, body)  => fetchJson(`https://api.hubapi.com${path}`, { method:"POST", headers: hsHeaders, body: JSON.stringify(body) }),
+    patch:(path, body)  => fetchJson(`https://api.hubapi.com${path}`, { method:"PATCH", headers: hsHeaders, body: JSON.stringify(body) }),
+    put:  (path)        => fetchJson(`https://api.hubapi.com${path}`, { method:"PUT", headers: hsHeaders }),
   };
 
   // ----------------------------
-  // Helpers
+  // Utils
   // ----------------------------
-  function asStr(v) { return String(v ?? "").trim(); }
-  function asNum(v, d = 0) {
+  const asStr = (v) => String(v ?? "").trim();
+  const asNum = (v, d=0) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : d;
-  }
+  };
 
   // Patch with fallback: if property doesn't exist, drop it and retry
-  async function patchWithFallback(objectType, objectId, properties) {
-    const attempt = async (props) =>
-      HS.patch(`/crm/v3/objects/${encodeURIComponent(objectType)}/${encodeURIComponent(objectId)}`, { properties: props });
+  async function patchDealWithFallback(dealId, properties) {
+    const attempt = async (props) => HS.patch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties: props });
 
     let r = await attempt(properties);
     if (r.ok) return r;
@@ -103,19 +119,19 @@ export async function handler(event) {
     return r;
   }
 
-  async function findContactIdByEmail(email) {
-    const r = await HS.post("/crm/v3/objects/contacts/search", {
-      filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
-      properties: ["email"],
+  async function findDealByLeadId(lead_id) {
+    const r = await HS.post("/crm/v3/objects/deals/search", {
+      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: lead_id }] }],
+      properties: ["lead_id", "dealname", "amount"],
       limit: 1,
     });
     return (r.ok && r.json?.results?.[0]?.id) ? String(r.json.results[0].id) : "";
   }
 
-  async function findDealByLeadId(lead_id) {
-    const r = await HS.post("/crm/v3/objects/deals/search", {
-      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: lead_id }] }],
-      properties: ["lead_id", "dealname", "amount"],
+  async function findContactIdByEmail(email) {
+    const r = await HS.post("/crm/v3/objects/contacts/search", {
+      filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
+      properties: ["email"],
       limit: 1,
     });
     return (r.ok && r.json?.results?.[0]?.id) ? String(r.json.results[0].id) : "";
@@ -134,7 +150,6 @@ export async function handler(event) {
   }
 
   async function createLineItem({ name, price, currency }) {
-    // NOTE: Line Items usually expect: name, price, quantity, hs_currency
     const r = await HS.post("/crm/v3/objects/line_items", {
       properties: {
         name,
@@ -148,90 +163,77 @@ export async function handler(event) {
   }
 
   async function getAssociationTypeId(from, to) {
-    // Get labels (associationTypeId) from HubSpot
     const r = await fetchJson(`https://api.hubapi.com/crm/v4/associations/${encodeURIComponent(from)}/${encodeURIComponent(to)}/labels`, {
       method: "GET",
       headers: hsHeaders,
     });
-
     if (r.ok && Array.isArray(r.json?.results) && r.json.results.length) {
-      // prefer HUBSPOT_DEFINED
       const pick = r.json.results.find(x => x.associationCategory === "HUBSPOT_DEFINED") || r.json.results[0];
       if (pick?.associationTypeId) return Number(pick.associationTypeId);
     }
-
-    // Unknown fallback — but we'll still attempt batch create with this; if it fails we won't fail the whole sync
     return null;
   }
 
-  async function associateV4Batch(fromType, toType, fromId, toId, associationTypeId) {
-    // v4 batch create associations
-    // POST /crm/v4/objects/{from}/{to}/batch/create
+  async function assocV4Batch(fromType, toType, fromId, toId, associationTypeId) {
     const url = `https://api.hubapi.com/crm/v4/objects/${encodeURIComponent(fromType)}/${encodeURIComponent(toType)}/batch/create`;
-    const body = {
-      inputs: [
-        {
-          from: { id: String(fromId) },
-          to: { id: String(toId) },
-          type: associationTypeId ? Number(associationTypeId) : undefined
-        }
-      ]
-    };
+    const input = { from: { id: String(fromId) }, to: { id: String(toId) } };
+    if (associationTypeId) input.type = Number(associationTypeId);
 
-    // If type is undefined, remove it (some accounts reject undefined fields)
-    if (!associationTypeId) delete body.inputs[0].type;
-
-    const r = await fetchJson(url, { method: "POST", headers: hsHeaders, body: JSON.stringify(body) });
+    const r = await fetchJson(url, {
+      method: "POST",
+      headers: hsHeaders,
+      body: JSON.stringify({ inputs: [input] }),
+    });
     return r;
   }
 
-  async function associateDealToContact(dealId, contactId) {
-    // best-effort; don’t fail whole flow
+  async function associateDealToLineItemBestEffort(dealId, lineItemId) {
+    // NEVER throw. Return ok + error message.
+    let lastErr = "";
+
+    try {
+      const assocTypeId = await getAssociationTypeId("deals", "line_items");
+
+      // Preferred: v4 batch create
+      if (assocTypeId) {
+        const r1 = await assocV4Batch("deals", "line_items", dealId, lineItemId, assocTypeId);
+        if (r1.ok) return { association_ok: true, association_error: "" };
+        lastErr = `v4 assoc failed (${r1.status}): ${r1.text}`;
+      }
+
+      // Fallback: v3 PUT using assocTypeId
+      if (assocTypeId) {
+        const r2 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/${encodeURIComponent(String(assocTypeId))}`);
+        if (r2.ok) return { association_ok: true, association_error: "" };
+        lastErr = lastErr || `v3 assoc failed (${r2.status}): ${r2.text}`;
+      }
+
+      // Final fallback: try common 6
+      const r3 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/6`);
+      if (r3.ok) return { association_ok: true, association_error: "" };
+      lastErr = lastErr || `v3 assoc(type 6) failed (${r3.status}): ${r3.text}`;
+
+    } catch (e) {
+      lastErr = String(e?.message || e);
+    }
+
+    return { association_ok: false, association_error: lastErr || "Association failed (non-fatal)" };
+  }
+
+  async function associateDealToContactBestEffort(dealId, contactId) {
+    // Never throw
     try {
       const assocTypeId = await getAssociationTypeId("deals", "contacts");
       if (assocTypeId) {
-        const r = await associateV4Batch("deals", "contacts", dealId, contactId, assocTypeId);
+        const r = await assocV4Batch("deals", "contacts", dealId, contactId, assocTypeId);
         return r.ok;
       }
-      // fallback to v3 PUT with a commonly-valid typeId (best effort)
+      // fallback common 3
       const r2 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/contacts/${encodeURIComponent(contactId)}/3`);
       return r2.ok;
     } catch {
       return false;
     }
-  }
-
-  async function associateDealToLineItem(dealId, lineItemId) {
-    // This is where you are currently failing. We will try multiple safe strategies and never throw.
-    let association_ok = false;
-    let association_error = "";
-
-    try {
-      const assocTypeId = await getAssociationTypeId("deals", "line_items");
-      // 1) Preferred: v4 batch create with correct associationTypeId
-      if (assocTypeId) {
-        const r = await associateV4Batch("deals", "line_items", dealId, lineItemId, assocTypeId);
-        if (r.ok) return { association_ok: true, association_error: "" };
-        association_error = `v4 batch assoc failed (${r.status}): ${r.text}`;
-      }
-
-      // 2) Fallback: try v3 PUT using assocTypeId if we have it
-      if (assocTypeId) {
-        const r2 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/${encodeURIComponent(String(assocTypeId))}`);
-        if (r2.ok) return { association_ok: true, association_error: "" };
-        association_error = association_error || `v3 assoc failed (${r2.status}): ${r2.text}`;
-      }
-
-      // 3) Final fallback: try v3 PUT with common default 6 (may work in some portals)
-      const r3 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/6`);
-      if (r3.ok) return { association_ok: true, association_error: "" };
-      association_error = association_error || `v3 assoc (type 6) failed (${r3.status}): ${r3.text}`;
-
-    } catch (e) {
-      association_error = String(e?.message || e);
-    }
-
-    return { association_ok, association_error };
   }
 
   // ----------------------------
@@ -248,34 +250,29 @@ export async function handler(event) {
     const currency = asStr(body.currency) || "USD";
 
     if (!email) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders(event.headers?.origin),
-        body: JSON.stringify({ error: "Missing email" }),
-      };
+      return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing email" }) };
     }
 
-    // 1) Deal idempotency by lead_id
+    // 1) Find/create deal by lead_id (idempotent)
     let dealId = await findDealByLeadId(lead_id);
     if (!dealId) {
       dealId = await createDeal({ lead_id, dealname, amount: lead_price });
     } else {
-      // keep it updated, but don't crash if fields don't exist
-      await patchWithFallback("deals", dealId, { dealname, amount: String(Math.round(lead_price)) });
+      await patchDealWithFallback(dealId, { dealname, amount: String(Math.round(lead_price)) });
     }
 
-    // 2) Contact association (best effort)
+    // 2) Best-effort associate to contact
     const contactId = await findContactIdByEmail(email);
-    if (contactId) await associateDealToContact(dealId, contactId);
+    if (contactId) await associateDealToContactBestEffort(dealId, contactId);
 
-    // 3) Line item creation
+    // 3) Create line item
     const lineItemId = await createLineItem({ name: line_item_name, price: lead_price, currency });
 
-    // 4) Deal -> line item association (best effort, never fail whole call)
-    const assoc = await associateDealToLineItem(dealId, lineItemId);
+    // 4) Best-effort associate deal->line item (never fail)
+    const assoc = await associateDealToLineItemBestEffort(dealId, lineItemId);
 
-    // 5) Optional status (won’t crash if property missing)
-    await patchWithFallback("deals", dealId, { lead_status: "Deliverables Processing" });
+    // 5) Optional status field (won’t crash if missing)
+    await patchDealWithFallback(dealId, { lead_status: "Deliverables Processing" });
 
     return {
       statusCode: 200,
