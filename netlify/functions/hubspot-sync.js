@@ -1,38 +1,16 @@
 // netlify/functions/hubspot-sync.js
 export async function handler(event) {
-  /* ==========================================
-     HUBSPOT-SYNC (FULL DROP-IN)
-     Goal: Create/Update Deal + Create Line Item
-           Attempt association but NEVER fail request
-           (Fixes: Associate deal→line_item 400 errors)
-
-     Expected inputs (from HSRESULTS):
-       { email, lead_id, dealname, line_item_name, lead_price, currency }
-
-     Output:
-       { ok:true, deal_id, line_item_id, association_ok, association_error }
-
-     NOTE:
-       - This function is designed so HSRESULTS never sees a 500
-         due to association issues.
-  ========================================== */
-
-  // ----------------------------
-  // CORS
-  // ----------------------------
   const allowedOrigins = [
-    "https://api.netcoreleads.com",
     "https://www.homesecurecalculator.com",
     "https://homesecurecalculator.com",
     "https://www.netcoreleads.com",
-    "https://netcoreleads.com"
+    "https://netcoreleads.com",
+    "https://api.netcoreleads.com",
   ];
 
   function corsHeaders(originRaw) {
     const origin = String(originRaw || "").trim();
-    const allowOrigin = origin
-      ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0])
-      : "*";
+    const allowOrigin = origin ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0]) : "*";
     return {
       "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -47,58 +25,39 @@ export async function handler(event) {
     return { statusCode: 204, headers: corsHeaders(event.headers?.origin), body: "" };
   }
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: "Method Not Allowed" }),
-    };
+    return { statusCode: 405, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Method Not Allowed" }) };
   }
 
-  // ----------------------------
-  // Auth
-  // ----------------------------
   const HS_TOKEN = String(process.env.HUBSPOT_PRIVATE_APP_TOKEN || "").trim();
+  const PIPELINE_ID = String(process.env.HUBSPOT_DEAL_PIPELINE_ID || "").trim();
+  const STAGE_QUALIFIED = String(process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "").trim();
+
   if (!HS_TOKEN) {
-    return {
-      statusCode: 500,
-      headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }),
-    };
+    return { statusCode: 500, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" }) };
   }
 
-  const hsHeaders = {
-    Authorization: `Bearer ${HS_TOKEN}`,
-    "Content-Type": "application/json",
-  };
+  const hsHeaders = { Authorization: `Bearer ${HS_TOKEN}`, "Content-Type": "application/json" };
 
-  async function readText(res){ try{ return await res.text(); }catch{ return ""; } }
-  async function fetchJson(url, options = {}) {
-    const res = await fetch(url, options);
-    const text = await readText(res);
-    let json = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-    return { ok: res.ok, status: res.status, json, text };
+  async function readText(r){ try{ return await r.text(); } catch { return ""; } }
+  async function fetchJson(url, options){
+    const r = await fetch(url, options);
+    const t = await readText(r);
+    let j=null; try{ j = t ? JSON.parse(t) : null; } catch { j=null; }
+    return { ok:r.ok, status:r.status, json:j, text:t };
   }
-
   const HS = {
-    get:  (path)        => fetchJson(`https://api.hubapi.com${path}`, { method:"GET", headers: hsHeaders }),
-    post: (path, body)  => fetchJson(`https://api.hubapi.com${path}`, { method:"POST", headers: hsHeaders, body: JSON.stringify(body) }),
-    patch:(path, body)  => fetchJson(`https://api.hubapi.com${path}`, { method:"PATCH", headers: hsHeaders, body: JSON.stringify(body) }),
-    put:  (path)        => fetchJson(`https://api.hubapi.com${path}`, { method:"PUT", headers: hsHeaders }),
+    get:  (path) => fetchJson(`https://api.hubapi.com${path}`, { method:"GET", headers: hsHeaders }),
+    post: (path, body) => fetchJson(`https://api.hubapi.com${path}`, { method:"POST", headers: hsHeaders, body: JSON.stringify(body) }),
+    put:  (path) => fetchJson(`https://api.hubapi.com${path}`, { method:"PUT", headers: hsHeaders }),
+    patch:(path, body) => fetchJson(`https://api.hubapi.com${path}`, { method:"PATCH", headers: hsHeaders, body: JSON.stringify(body) }),
   };
 
-  // ----------------------------
-  // Utils
-  // ----------------------------
-  const asStr = (v) => String(v ?? "").trim();
-  const asNum = (v, d=0) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : d;
-  };
+  const asStr = (v)=>String(v ?? "").trim();
+  const asNum = (v, d=0)=>{ const n = Number(v); return Number.isFinite(n) ? n : d; };
 
-  // Patch with fallback: if property doesn't exist, drop it and retry
-  async function patchDealWithFallback(dealId, properties) {
-    const attempt = async (props) => HS.patch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties: props });
+  // Patch with fallback: drop unknown properties rather than failing
+  async function patchDealWithFallback(dealId, properties){
+    const attempt = async (props)=>HS.patch(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties: props });
 
     let r = await attempt(properties);
     if (r.ok) return r;
@@ -119,179 +78,173 @@ export async function handler(event) {
     return r;
   }
 
-  async function findDealByLeadId(lead_id) {
-    const r = await HS.post("/crm/v3/objects/deals/search", {
-      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: lead_id }] }],
-      properties: ["lead_id", "dealname", "amount"],
-      limit: 1,
-    });
-    return (r.ok && r.json?.results?.[0]?.id) ? String(r.json.results[0].id) : "";
-  }
-
-  async function findContactIdByEmail(email) {
+  async function findContactIdByEmail(email){
     const r = await HS.post("/crm/v3/objects/contacts/search", {
-      filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
+      filterGroups: [{ filters: [{ propertyName:"email", operator:"EQ", value: email }] }],
       properties: ["email"],
-      limit: 1,
+      limit: 1
     });
     return (r.ok && r.json?.results?.[0]?.id) ? String(r.json.results[0].id) : "";
   }
 
-  async function createDeal({ lead_id, dealname, amount }) {
-    const r = await HS.post("/crm/v3/objects/deals", {
-      properties: {
-        lead_id,
-        dealname,
-        amount: String(Math.round(amount || 0)),
-      }
-    });
-    if (!r.ok || !r.json?.id) throw new Error(`Create deal failed (${r.status}): ${r.text}`);
-    return String(r.json.id);
-  }
-
-  async function createLineItem({ name, price, currency }) {
-    const r = await HS.post("/crm/v3/objects/line_items", {
-      properties: {
-        name,
-        price: String(asNum(price, 0)),
-        quantity: "1",
-        hs_currency: currency || "USD",
-      }
-    });
-    if (!r.ok || !r.json?.id) throw new Error(`Create line item failed (${r.status}): ${r.text}`);
-    return String(r.json.id);
-  }
-
-  async function getAssociationTypeId(from, to) {
+  async function getAssocTypeId(from, to){
     const r = await fetchJson(`https://api.hubapi.com/crm/v4/associations/${encodeURIComponent(from)}/${encodeURIComponent(to)}/labels`, {
-      method: "GET",
-      headers: hsHeaders,
+      method:"GET",
+      headers: { Authorization: `Bearer ${HS_TOKEN}` }
     });
-    if (r.ok && Array.isArray(r.json?.results) && r.json.results.length) {
+    if (r.ok && Array.isArray(r.json?.results) && r.json.results.length){
       const pick = r.json.results.find(x => x.associationCategory === "HUBSPOT_DEFINED") || r.json.results[0];
       if (pick?.associationTypeId) return Number(pick.associationTypeId);
     }
     return null;
   }
 
-  async function assocV4Batch(fromType, toType, fromId, toId, associationTypeId) {
+  async function assocV4Batch(fromType, toType, fromId, toId, assocTypeId){
     const url = `https://api.hubapi.com/crm/v4/objects/${encodeURIComponent(fromType)}/${encodeURIComponent(toType)}/batch/create`;
     const input = { from: { id: String(fromId) }, to: { id: String(toId) } };
-    if (associationTypeId) input.type = Number(associationTypeId);
+    if (assocTypeId) input.type = Number(assocTypeId);
 
     const r = await fetchJson(url, {
-      method: "POST",
+      method:"POST",
       headers: hsHeaders,
-      body: JSON.stringify({ inputs: [input] }),
+      body: JSON.stringify({ inputs: [input] })
     });
-    return r;
+    return r.ok;
   }
 
-  async function associateDealToLineItemBestEffort(dealId, lineItemId) {
-    // NEVER throw. Return ok + error message.
-    let lastErr = "";
+  async function ensureDealPropertiesSafe(props){
+    // Always include dealname + amount. Pipeline/stage only if env provided.
+    const out = {
+      dealname: props.dealname,
+      amount: String(Math.round(props.amount || 0)),
+      lead_status: props.lead_status || "SQL Lead Interest",
+      description: props.description || ""
+    };
+    if (PIPELINE_ID) out.pipeline = PIPELINE_ID;
+    if (STAGE_QUALIFIED) out.dealstage = STAGE_QUALIFIED;
 
-    try {
-      const assocTypeId = await getAssociationTypeId("deals", "line_items");
+    // Best-effort extras (only work if you created these deal properties)
+    out.lead_id = props.lead_id;
+    out.lead_zip = props.lead_zip;
+    out.lead_contact_id = props.lead_contact_id;
 
-      // Preferred: v4 batch create
-      if (assocTypeId) {
-        const r1 = await assocV4Batch("deals", "line_items", dealId, lineItemId, assocTypeId);
-        if (r1.ok) return { association_ok: true, association_error: "" };
-        lastErr = `v4 assoc failed (${r1.status}): ${r1.text}`;
-      }
-
-      // Fallback: v3 PUT using assocTypeId
-      if (assocTypeId) {
-        const r2 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/${encodeURIComponent(String(assocTypeId))}`);
-        if (r2.ok) return { association_ok: true, association_error: "" };
-        lastErr = lastErr || `v3 assoc failed (${r2.status}): ${r2.text}`;
-      }
-
-      // Final fallback: try common 6
-      const r3 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/line_items/${encodeURIComponent(lineItemId)}/6`);
-      if (r3.ok) return { association_ok: true, association_error: "" };
-      lastErr = lastErr || `v3 assoc(type 6) failed (${r3.status}): ${r3.text}`;
-
-    } catch (e) {
-      lastErr = String(e?.message || e);
-    }
-
-    return { association_ok: false, association_error: lastErr || "Association failed (non-fatal)" };
+    return out;
   }
 
-  async function associateDealToContactBestEffort(dealId, contactId) {
-    // Never throw
-    try {
-      const assocTypeId = await getAssociationTypeId("deals", "contacts");
-      if (assocTypeId) {
-        const r = await assocV4Batch("deals", "contacts", dealId, contactId, assocTypeId);
-        return r.ok;
+  async function createDealSafe(props){
+    // Try with full property set; if some properties don't exist, patch fallback logic later.
+    const r = await HS.post("/crm/v3/objects/deals", { properties: props });
+    if (r.ok && r.json?.id) return String(r.json.id);
+
+    // If HubSpot rejects because unknown fields, retry with minimal required fields
+    const r2 = await HS.post("/crm/v3/objects/deals", {
+      properties: {
+        dealname: props.dealname,
+        amount: props.amount,
+        ...(PIPELINE_ID ? { pipeline: PIPELINE_ID } : {}),
+        ...(STAGE_QUALIFIED ? { dealstage: STAGE_QUALIFIED } : {})
       }
-      // fallback common 3
-      const r2 = await HS.put(`/crm/v3/objects/deals/${encodeURIComponent(dealId)}/associations/contacts/${encodeURIComponent(contactId)}/3`);
-      return r2.ok;
-    } catch {
-      return false;
-    }
+    });
+    if (r2.ok && r2.json?.id) return String(r2.json.id);
+
+    throw new Error(`Create deal failed (${r2.status || r.status}): ${r2.text || r.text}`);
   }
 
-  // ----------------------------
-  // Main
-  // ----------------------------
-  try {
+  // Optional lead store inventory push
+  const LEAD_STORE_ENABLE = String(process.env.LEAD_STORE_ENABLE || "").trim().toLowerCase();
+  const LEAD_STORE_API_URL = String(process.env.LEAD_STORE_API_URL || "").trim();
+  async function pushToLeadStoreBestEffort(payload){
+    if (!LEAD_STORE_API_URL) return;
+    if (!["1","true","yes","on"].includes(LEAD_STORE_ENABLE)) return;
+    try{
+      await fetch(LEAD_STORE_API_URL, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(payload)
+      });
+    } catch {}
+  }
+
+  try{
     const body = JSON.parse(event.body || "{}");
 
+    // Inputs you can send from landing:
     const email = asStr(body.email);
-    const lead_id = asStr(body.lead_id) || String(Date.now());
-    const dealname = asStr(body.dealname) || `HSC Lead ${lead_id}`;
-    const line_item_name = asStr(body.line_item_name) || `HSC Lead Item ${lead_id}`;
-    const lead_price = asNum(body.lead_price, 0);
-    const currency = asStr(body.currency) || "USD";
+    const zipcode = asStr(body.zip || body.zipcode || body.postal_code || body.postalCode);
+    const lead_id = asStr(body.lead_id) || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    const contact_id_in = asStr(body.contact_id || body.contactId);
 
     if (!email) {
       return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing email" }) };
     }
 
-    // 1) Find/create deal by lead_id (idempotent)
-    let dealId = await findDealByLeadId(lead_id);
-    if (!dealId) {
-      dealId = await createDeal({ lead_id, dealname, amount: lead_price });
-    } else {
-      await patchDealWithFallback(dealId, { dealname, amount: String(Math.round(lead_price)) });
+    const contactId = contact_id_in || await findContactIdByEmail(email);
+    const dealName = `Exclusive Lead - ${zipcode || "NOZIP"} - ${contactId || "NOCONTACT"}`;
+
+    const amount = 400; // per your requirement
+    const description =
+      `Exclusive Lead\n` +
+      `lead_id=${lead_id}\n` +
+      `email=${email}\n` +
+      (zipcode ? `zip=${zipcode}\n` : "") +
+      (contactId ? `contact_id=${contactId}\n` : "");
+
+    // Create a NEW deal per lead (no dedupe on email)
+    const dealProps = await ensureDealPropertiesSafe({
+      dealname: dealName,
+      amount,
+      lead_id,
+      lead_zip: zipcode,
+      lead_contact_id: contactId,
+      lead_status: "SQL Lead Interest",
+      description
+    });
+
+    const dealId = await createDealSafe(dealProps);
+
+    // Best-effort patch to add optional custom fields if they exist
+    await patchDealWithFallback(dealId, {
+      lead_id,
+      lead_zip: zipcode,
+      lead_contact_id: contactId,
+      lead_status: "SQL Lead Interest"
+    });
+
+    // Associate deal ↔ contact (best effort)
+    if (contactId) {
+      const assocTypeId = await getAssocTypeId("deals", "contacts");
+      if (assocTypeId) await assocV4Batch("deals", "contacts", dealId, contactId, assocTypeId);
     }
 
-    // 2) Best-effort associate to contact
-    const contactId = await findContactIdByEmail(email);
-    if (contactId) await associateDealToContactBestEffort(dealId, contactId);
-
-    // 3) Create line item
-    const lineItemId = await createLineItem({ name: line_item_name, price: lead_price, currency });
-
-    // 4) Best-effort associate deal->line item (never fail)
-    const assoc = await associateDealToLineItemBestEffort(dealId, lineItemId);
-
-    // 5) Optional status field (won’t crash if missing)
-    await patchDealWithFallback(dealId, { lead_status: "Deliverables Processing" });
+    // Optional inventory push
+    await pushToLeadStoreBestEffort({
+      lead_id,
+      deal_id: dealId,
+      email,
+      zip: zipcode,
+      contact_id: contactId,
+      amount
+    });
 
     return {
       statusCode: 200,
       headers: corsHeaders(event.headers?.origin),
       body: JSON.stringify({
         ok: true,
+        lead_id,
         deal_id: dealId,
-        line_item_id: lineItemId,
-        association_ok: !!assoc.association_ok,
-        association_error: assoc.association_error || ""
-      }),
+        contact_id: contactId || null,
+        dealname: dealName,
+        amount
+      })
     };
 
-  } catch (err) {
+  } catch(err){
     console.error("hubspot-sync error:", err);
     return {
       statusCode: 500,
       headers: corsHeaders(event.headers?.origin),
-      body: JSON.stringify({ error: String(err?.message || err) }),
+      body: JSON.stringify({ error: String(err?.message || err) })
     };
   }
 }
