@@ -7,7 +7,7 @@
 //   ✅ If PDF URL exists but CSV URL missing, still try to resolve CSV
 //   ✅ Cache PUBLIC hosting URLs back onto the deal (safe + fast)
 
-export async function handler(event) {
+exports.handler = async (event) => {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
     "https://homesecurecalculator.com",
@@ -204,6 +204,7 @@ export async function handler(event) {
           lead_id: String(props.lead_id || lead_id || "").trim(),
           pdf_file_id: pdfFileId || null,
           pdf_url: pdfUrlStored,
+          url: pdfUrlStored,
           csv_file_id: csvFileId || null,
           csv_url: csvUrlStored,
           source: "deal_properties",
@@ -245,6 +246,7 @@ export async function handler(event) {
           lead_id: String(props.lead_id || lead_id || "").trim(),
           pdf_file_id: pdfFileId || null,
           pdf_url: pdfUrlStored,
+          url: pdfUrlStored,
           csv_file_id: csvFileId || null,
           csv_url: csvUrlStored || null,
           csv_url_mode: csvBest?.mode || null,
@@ -319,6 +321,7 @@ export async function handler(event) {
         lead_id: String(props.lead_id || lead_id || "").trim(),
         pdf_file_id: pdfFileId || null,
         pdf_url: pdfUrlStored,
+          url: pdfUrlStored,
         pdf_url_mode: pdfMode || (pdfUrlStored ? "deal_properties" : null),
         csv_file_id: csvFileId || null,
         csv_url: csv_url || null,
