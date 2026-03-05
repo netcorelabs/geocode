@@ -153,8 +153,9 @@ export async function handler(event) {
 
     let pdf_url = String(body.pdf_url || "").trim();
     let csv_url = String(body.csv_url || "").trim();
-
-    const pageUri = String(body.pageUri || "").trim() || undefined;
+    
+    const pageUri = String(body.pageUri || "").trim() ||
+      undefined;
     const legalConsentOptions = body.legalConsentOptions || undefined;
 
     if (!email) {
