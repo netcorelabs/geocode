@@ -8,7 +8,7 @@
 //   HUBSPOT_DEAL_STAGE_QUALIFIED (optional)
 //   HUBSPOT_DEAL_AMOUNT_DEFAULT (optional; default 400)
 
-export async function handler(event) {
+exports.handler = async (event) => {
   const allowedOrigins = [
     "https://www.homesecurecalculator.com",
     "https://homesecurecalculator.com",
@@ -141,7 +141,20 @@ export async function handler(event) {
     return (r.ok && r.json?.results?.[0]) ? r.json.results[0] : null;
   }
 
-  async function createDeal(props) {
+  
+  async function findExistingLineItemByLeadToken(leadId) {
+    if (!leadId) return null;
+    const r = await hsPost("/crm/v3/objects/line_items/search", {
+      filterGroups: [
+        { filters: [{ propertyName: "name", operator: "CONTAINS_TOKEN", value: leadId }] }
+      ],
+      properties: ["name", "price", "quantity", "hs_currency"],
+      limit: 1,
+    });
+    return (r.ok && r.json?.results?.[0]) ? r.json.results[0] : null;
+  }
+
+async function createDeal(props) {
     const r = await hsPost("/crm/v3/objects/deals", { properties: props });
     if (!r.ok || !r.json?.id) throw new Error(`Create deal failed (${r.status}): ${r.text || JSON.stringify(r.json)}`);
     return String(r.json.id);
@@ -225,15 +238,30 @@ export async function handler(event) {
     // 3) Associate deal to contact
     await associateDefault("contacts", contactId, "deals", dealId);
 
-    // 4) Create line item + associate to deal
+    // 4) Find or create ONE line item per lead_id, then associate to deal
     const lineItemName = `Exclusive Lead — ${postal_code || "NA"} — ${lead_id}`;
-    const lineItemId = await createLineItem({
-      name: lineItemName,
-      quantity: "1",
-      price: String(amount),
-      hs_currency: currency,
-      recurringbillingfrequency: "one_time",
-    });
+    let lineItem = await findExistingLineItemByLeadToken(lead_id);
+    let lineItemId = lineItem?.id ? String(lineItem.id) : "";
+
+    if (!lineItemId) {
+      lineItemId = await createLineItem({
+        name: lineItemName,
+        quantity: "1",
+        price: String(amount),
+        hs_currency: currency,
+        recurringbillingfrequency: "one_time",
+      });
+    } else {
+      // Best-effort update (won't fail the flow)
+      await hsPatch(`/crm/v3/objects/line_items/${encodeURIComponent(lineItemId)}`, {
+        properties: {
+          name: lineItemName,
+          price: String(amount),
+          hs_currency: currency,
+        },
+      }).catch(()=>{});
+    }
+
     await associateDefault("deals", dealId, "line_items", lineItemId);
 
     // 5) Best-effort patch (won't fail if properties don't exist)
