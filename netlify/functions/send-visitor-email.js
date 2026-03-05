@@ -1,30 +1,32 @@
 // netlify/functions/send-visitor-email.js
 // FULL DROP-IN REPLACEMENT
 //
-// Adds missing features:
-// 1) Sends "deliverables ready" via HubSpot form submit (keeps your existing automation).
-// 2) Updates the HubSpot DEAL:
-//    - description: appends a CSV representation of the full payload
-//    - hsc_report_pdf_url: set to resolved/received pdf_url
-//    - hsc_report_csv_url: set to resolved/received csv_url
+// What this does (end-to-end):
+// ✅ Resolves/accepts PDF + CSV URLs (pdf_url/csv_url)
+// ✅ Submits HubSpot "Deliverables Ready" form (keeps your existing automation)
+// ✅ Updates the HubSpot DEAL:
+//    - description: appends a CSV representation of the full incoming payload
+//    - hsc_report_pdf_url, hsc_report_csv_url
+// ✅ Updates the HubSpot CONTACT (by contact_id if provided, otherwise lookup by email):
+//    - hsc_report_pdf_url, hsc_report_csv_url
 //
-// Env:
+// Env vars required:
 //   HS_DELIVERABLES_PORTAL_ID   (required)  e.g. 245087053
 //   HS_DELIVERABLES_FORM_ID     (required)  GUID from the form embed code
-//   HUBSPOT_PRIVATE_APP_TOKEN   (required for deal update)
+//   HUBSPOT_PRIVATE_APP_TOKEN   (required)  for Deal + Contact updates
 //
-// POST JSON (same as before, plus you MUST pass deal_id to update the deal):
+// POST JSON expected:
 // {
-//   "email": "visitor@example.com",
-//   "firstname": "Bruce",
-//   "lastname": "Evans",
-//   "lead_id": "uuid",
-//   "deal_id": "1234567890",     // REQUIRED for deal patch
-//   "pdf_url": "https://...",    // optional (if omitted, resolved via visitor-pdf-link)
-//   "csv_url": "https://...",    // optional
-//   "pageUri": "https://....",   // optional
-//   "legalConsentOptions": {...} // optional (only if your form requires it)
-//   ... any other fields (full payload will be included in CSV block)
+//   "email": "visitor@example.com",               // required (for form + contact lookup)
+//   "firstname": "Bruce", "lastname": "Evans",    // optional
+//   "lead_id": "uuid",                            // optional but used to resolve links
+//   "deal_id": "57263930023",                     // required for deal patch (unless you extend to lookup)
+//   "contact_id": "12345",                        // optional (faster than email lookup)
+//   "pdf_url": "https://...",                     // optional if resolvable via visitor-pdf-link
+//   "csv_url": "https://...",                     // optional
+//   "pageUri": "https://....",                    // optional
+//   "legalConsentOptions": {...},                 // optional (only if form requires it)
+//   ... any other fields (full payload included in CSV block appended to deal description)
 // }
 
 export async function handler(event) {
@@ -84,6 +86,7 @@ export async function handler(event) {
   async function readText(res) {
     try { return await res.text(); } catch { return ""; }
   }
+
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     const text = await readText(res);
@@ -101,7 +104,6 @@ export async function handler(event) {
 
   function csvEscape(v) {
     const s = String(v ?? "");
-    // Escape quotes, wrap in quotes if needed
     const needs = /[",\n\r]/.test(s);
     const escaped = s.replace(/"/g, '""');
     return needs ? `"${escaped}"` : escaped;
@@ -169,7 +171,7 @@ export async function handler(event) {
       ...(firstname ? [{ name: "firstname", value: firstname }] : []),
       ...(lastname ? [{ name: "lastname", value: lastname }] : []),
 
-      // MUST exist as hidden fields on the form:
+      // Hidden fields on the form:
       { name: "hsc_report_pdf_url", value: pdf_url },
       ...(csv_url ? [{ name: "hsc_report_csv_url", value: csv_url }] : []),
 
@@ -237,18 +239,21 @@ export async function handler(event) {
       };
     }
     if (!deal_id) {
-      return { ok: false, statusCode: 400, error: "Missing deal_id", detail: "deal_id is required to update deal properties." };
+      return {
+        ok: false,
+        statusCode: 400,
+        error: "Missing deal_id",
+        detail: "deal_id is required to update deal properties.",
+      };
     }
 
-    // Fetch existing description so we can append instead of overwrite
     const existing = await getDealDescription(deal_id);
     const existingDesc = existing.ok ? existing.description : "";
 
     const stamp = new Date().toISOString();
     const newBlock =
       `\n\n---\n` +
-      `HSC Payload CSV (generated ${stamp})\n` +
-      `\n` +
+      `HSC Payload CSV (generated ${stamp})\n\n` +
       `${payloadCsvBlock}\n` +
       `---\n`;
 
@@ -260,7 +265,7 @@ export async function handler(event) {
       hsc_report_csv_url: String(csv_url || "").trim(),
     };
 
-    // Remove empty urls so we don't blank fields accidentally
+    // don't accidentally blank fields
     if (!properties.hsc_report_pdf_url) delete properties.hsc_report_pdf_url;
     if (!properties.hsc_report_csv_url) delete properties.hsc_report_csv_url;
 
@@ -288,6 +293,114 @@ export async function handler(event) {
     return { ok: true, updated: r.json };
   }
 
+  async function findContactIdByEmail(email) {
+    if (!HS_TOKEN) return { ok: false, statusCode: 500, error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" };
+    const clean = String(email || "").trim().toLowerCase();
+    if (!clean) return { ok: false, statusCode: 400, error: "Missing email for contact lookup" };
+
+    const url = "https://api.hubapi.com/crm/v3/objects/contacts/search";
+    const r = await fetchJson(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${HS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "email", operator: "EQ", value: clean }
+            ]
+          }
+        ],
+        properties: ["email"],
+        limit: 1
+      }),
+    });
+
+    if (!r.ok) {
+      return {
+        ok: false,
+        statusCode: 502,
+        error: "HubSpot contact search failed",
+        status: r.status,
+        detail: r.text || r.json,
+      };
+    }
+
+    const id = String(r.json?.results?.[0]?.id || "").trim();
+    if (!id) {
+      return {
+        ok: false,
+        statusCode: 404,
+        error: "Contact not found by email",
+        detail: { email: clean },
+      };
+    }
+    return { ok: true, contact_id: id };
+  }
+
+  async function patchContact({ contact_id, email, pdf_url, csv_url }) {
+    if (!HS_TOKEN) {
+      return {
+        ok: false,
+        statusCode: 500,
+        error: "Missing HUBSPOT_PRIVATE_APP_TOKEN",
+        detail: "Set HUBSPOT_PRIVATE_APP_TOKEN in Netlify environment variables to update contacts.",
+      };
+    }
+
+    let cid = String(contact_id || "").trim();
+
+    // If no contact_id, lookup by email
+    if (!cid) {
+      const found = await findContactIdByEmail(email);
+      if (!found.ok) return found;
+      cid = String(found.contact_id || "").trim();
+      if (!cid) {
+        return { ok: false, statusCode: 404, error: "Contact lookup returned no id" };
+      }
+    }
+
+    const properties = {
+      hsc_report_pdf_url: String(pdf_url || "").trim(),
+      hsc_report_csv_url: String(csv_url || "").trim(),
+    };
+
+    // don't blank fields accidentally
+    if (!properties.hsc_report_pdf_url) delete properties.hsc_report_pdf_url;
+    if (!properties.hsc_report_csv_url) delete properties.hsc_report_csv_url;
+
+    // If both missing, no-op
+    if (!properties.hsc_report_pdf_url && !properties.hsc_report_csv_url) {
+      return { ok: true, contact_id: cid, skipped: true, reason: "No URLs to set" };
+    }
+
+    const url = `https://api.hubapi.com/crm/v3/objects/contacts/${encodeURIComponent(cid)}`;
+    const r = await fetchJson(url, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${HS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ properties }),
+    });
+
+    if (!r.ok) {
+      return {
+        ok: false,
+        statusCode: 502,
+        error: "HubSpot contact update failed",
+        status: r.status,
+        detail: r.text || r.json,
+        attempted_properties: properties,
+        contact_id: cid,
+      };
+    }
+
+    return { ok: true, contact_id: cid, updated: r.json };
+  }
+
   try {
     const body = JSON.parse(event.body || "{}");
 
@@ -296,6 +409,7 @@ export async function handler(event) {
     const lastname = String(body.lastname || "").trim();
     const lead_id = String(body.lead_id || "").trim();
     const deal_id = String(body.deal_id || "").trim();
+    const contact_id = String(body.contact_id || "").trim();
 
     let pdf_url = String(body.pdf_url || "").trim();
     let csv_url = String(body.csv_url || "").trim();
@@ -311,7 +425,7 @@ export async function handler(event) {
       };
     }
 
-    // If pdf_url not provided, resolve via your visitor-pdf-link function
+    // Resolve links if not provided
     if (!pdf_url) {
       if (!lead_id && !deal_id) {
         return {
@@ -334,7 +448,7 @@ export async function handler(event) {
       if (!csv_url) csv_url = resolved.csv_url || "";
     }
 
-    // 1) Submit the form (triggers your email automation)
+    // 1) Submit HubSpot form (keeps your existing automation)
     const submitted = await submitDeliverablesForm({
       email, firstname, lastname, lead_id, deal_id, pdf_url, csv_url, pageUri, legalConsentOptions,
     });
@@ -347,14 +461,14 @@ export async function handler(event) {
       };
     }
 
-    // 2) Build CSV of the FULL payload and append to the deal description + set deal URLs
-    // Include the resolved urls in the CSV too (helpful for audit)
+    // 2) Build CSV of the FULL payload and append to deal description + set deal URLs
     const payloadForCsv = {
       ...body,
       pdf_url,
       csv_url,
       lead_id: lead_id || body.lead_id || "",
       deal_id: deal_id || body.deal_id || "",
+      contact_id: contact_id || body.contact_id || "",
     };
     const payloadCsv = buildPayloadKeyValueCsv(payloadForCsv);
 
@@ -365,8 +479,16 @@ export async function handler(event) {
       payloadCsvBlock: payloadCsv,
     });
 
+    // 3) Patch CONTACT with same URLs (by contact_id OR lookup by email)
+    const contactPatched = await patchContact({
+      contact_id,
+      email,
+      pdf_url,
+      csv_url,
+    });
+
+    // If deal patch fails, return that clearly (even if form submit worked)
     if (!dealPatched.ok) {
-      // We still return 200 if email/form worked, but show deal error clearly
       return {
         statusCode: dealPatched.statusCode || 500,
         headers: corsHeaders(event.headers?.origin),
@@ -374,9 +496,29 @@ export async function handler(event) {
           ok: false,
           form_submit_ok: true,
           deal_update_ok: false,
+          contact_update_ok: !!contactPatched?.ok,
           pdf_url,
           csv_url: csv_url || null,
           deal_error: dealPatched,
+          contact_result: contactPatched,
+        }),
+      };
+    }
+
+    // If contact patch fails, return 200 but include contact error so you can see it
+    if (!contactPatched.ok) {
+      return {
+        statusCode: contactPatched.statusCode || 500,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({
+          ok: false,
+          form_submit_ok: true,
+          deal_update_ok: true,
+          contact_update_ok: false,
+          pdf_url,
+          csv_url: csv_url || null,
+          deal_id: deal_id || null,
+          contact_error: contactPatched,
         }),
       };
     }
@@ -388,9 +530,11 @@ export async function handler(event) {
         ok: true,
         form_submit_ok: true,
         deal_update_ok: true,
+        contact_update_ok: true,
+        deal_id: deal_id || null,
+        contact_id: contactPatched.contact_id || contact_id || null,
         pdf_url,
         csv_url: csv_url || null,
-        deal_id: deal_id || null,
       }),
     };
   } catch (err) {
