@@ -2,9 +2,11 @@
 // Uploads visitor PDF + CSV to HubSpot Files and stores IDs + PUBLIC URLs on the Deal.
 // Uses PUBLIC_NOT_INDEXABLE access so the visitor can download without auth.
 //
-// Flow expectation (matches your hardened setup):
-// ✅ HSRESULTS generates pdf_base64 + csv_text and calls this function ONCE per deal_id
-// ✅ Thank You page only polls visitor-pdf-link for deliverable_pdf_url/csv_url
+// ✅ HARDENED FIX (v2)
+// - If PATCH/GET Deal returns 404 (resource not found), automatically attempts to RECOVER the deal_id by lead_id
+//   using the Deals Search API (query + optional lead_id EQ filter).
+// - Returns clear diagnostics (portalId, recovered_deal_id, deal_lookup_attempts) to quickly spot portal/token mismatch.
+// - Treats deal association / note creation as best-effort (won’t block deliverables being saved on the deal).
 //
 // Expected env:
 //   HUBSPOT_PRIVATE_APP_TOKEN (required)
@@ -99,18 +101,97 @@ export async function handler(event) {
     return /No folder exists with folderId|folderId/i.test(t);
   }
 
-  async function patchDealWithFallback(dealId, properties) {
-    const attempt = async (props) =>
-      fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, {
-        method: "PATCH",
+  // -------- Portal Meta (helps debug token/portal mismatch)
+  async function getPortalMeta() {
+    const r = await fetchJson("https://api.hubapi.com/integrations/v1/me", {
+      method: "GET",
+      headers: { ...hsAuth, "Accept": "application/json" }
+    });
+    if (!r.ok) return null;
+    return r.json || null; // contains portalId, user, etc.
+  }
+
+  // -------- Deal Recovery (when PATCH/GET Deal returns 404)
+  async function searchDealByLeadId(leadId) {
+    const attempts = [];
+    const url = "https://api.hubapi.com/crm/v3/objects/deals/search";
+
+    const postSearch = async (payload) => {
+      const r = await fetchJson(url, {
+        method: "POST",
         headers: { ...hsAuth, "Content-Type": "application/json" },
-        body: JSON.stringify({ properties: props }),
+        body: JSON.stringify(payload)
       });
+      attempts.push({ request: payload, status: r.status, ok: r.ok });
+      return r;
+    };
 
-    let r = await attempt(properties);
-    if (r.ok) return r;
+    // Attempt 1: filter on custom property "lead_id" == leadId (if it exists)
+    let r = await postSearch({
+      filterGroups: [{
+        filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }]
+      }],
+      properties: ["dealname", "lead_id", "hs_object_id"],
+      limit: 5,
+      sorts: [{ propertyName: "createdate", direction: "DESCENDING" }]
+    });
 
-    // Robustly collect missing property names (HubSpot errors sometimes return string or array)
+    if (r.ok && Array.isArray(r.json?.results) && r.json.results.length) {
+      return { dealId: String(r.json.results[0].id || "").trim(), attempts };
+    }
+
+    // Attempt 2: broad query search
+    r = await postSearch({
+      query: leadId,
+      properties: ["dealname", "hs_object_id"],
+      limit: 5
+    });
+
+    if (r.ok && Array.isArray(r.json?.results) && r.json.results.length) {
+      return { dealId: String(r.json.results[0].id || "").trim(), attempts };
+    }
+
+    return { dealId: "", attempts };
+  }
+
+  async function readDealProps(dealId) {
+    const r = await fetchJson(
+      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}` +
+        `?properties=deliverable_pdf_file_id,deliverable_csv_file_id,deliverable_pdf_url,deliverable_csv_url,lead_status,description,dealname`,
+      { method: "GET", headers: { ...hsAuth } }
+    );
+    if (!r.ok) return { ok:false, status:r.status, json:r.json, text:r.text };
+    return { ok:true, status:r.status, json:r.json, text:r.text };
+  }
+
+  async function patchDeal(dealId, properties) {
+    return fetchJson(`https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, {
+      method: "PATCH",
+      headers: { ...hsAuth, "Content-Type": "application/json" },
+      body: JSON.stringify({ properties }),
+    });
+  }
+
+  async function patchDealWithFallback(dealId, properties) {
+    const attempt = async (id, props) => patchDeal(id, props);
+
+    let r = await attempt(dealId, properties);
+    if (r.ok) return { ...r, deal_id: dealId, recovered: false };
+
+    // If deal not found, try recover by lead_id
+    if (r.status === 404) {
+      const leadIdForRecovery = String(properties?.lead_id || "").trim();
+      if (leadIdForRecovery) {
+        const rec = await searchDealByLeadId(leadIdForRecovery);
+        if (rec.dealId) {
+          const r2 = await attempt(rec.dealId, properties);
+          if (r2.ok) return { ...r2, deal_id: rec.dealId, recovered: true, deal_lookup_attempts: rec.attempts };
+          r = r2;
+        }
+      }
+    }
+
+    // Filter missing properties if needed
     const badProps = new Set();
     for (const e of (r.json?.errors || [])) {
       if (e?.code !== "PROPERTY_DOESNT_EXIST") continue;
@@ -122,21 +203,13 @@ export async function handler(event) {
     if (badProps.size) {
       const filtered = Object.fromEntries(Object.entries(properties).filter(([k]) => !badProps.has(k)));
       if (Object.keys(filtered).length) {
-        r = await attempt(filtered);
-        if (r.ok) return r;
+        const r3 = await attempt(dealId, filtered);
+        if (r3.ok) return { ...r3, deal_id: dealId, recovered: false, filtered_missing_props: Array.from(badProps) };
+        return { ...r3, deal_id: dealId, recovered: false, filtered_missing_props: Array.from(badProps) };
       }
     }
-    return r;
-  }
 
-  async function readDealProps(dealId) {
-    const r = await fetchJson(
-      `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}` +
-        `?properties=deliverable_pdf_file_id,deliverable_csv_file_id,deliverable_pdf_url,deliverable_csv_url,lead_status,description`,
-      { method: "GET", headers: { ...hsAuth } }
-    );
-    if (!r.ok) return null;
-    return r.json;
+    return { ...r, deal_id: dealId, recovered: false };
   }
 
   async function getFileHostingUrl(fileId) {
@@ -165,19 +238,15 @@ export async function handler(event) {
       return form;
     };
 
-    // Attempt with folderId if set, else folderPath
     let res = await fetchJson("https://api.hubapi.com/files/v3/files", {
       method: "POST",
-      headers: { ...hsAuth }, // no Content-Type here
+      headers: { ...hsAuth },
       body: makeForm(true),
     });
 
-    // Auto-fallback if folderId is invalid
     if (!res.ok && folderId && res.status === 404 && looksLikeBadFolderId(res.text || JSON.stringify(res.json))) {
-      // drop folderId and fallback to folderPath
       folderId = "";
       if (!folderPath) folderPath = "/";
-
       res = await fetchJson("https://api.hubapi.com/files/v3/files", {
         method: "POST",
         headers: { ...hsAuth },
@@ -201,12 +270,17 @@ export async function handler(event) {
     const props = {
       hs_timestamp: now,
       hs_note_body:
-        `Deliverables generated for Lead ID ${leadId}.\n\n` +
-        `PDF: ${pdfUrl || "(url pending)"}\n` +
-        `CSV: ${csvUrl || "(url pending)"}\n\n` +
-        `Attached file IDs: ${fileIds.join(", ")}\n` +
+        `Deliverables generated for Lead ID ${leadId}.
+
+` +
+        `PDF: ${pdfUrl || "(url pending)"}
+` +
+        `CSV: ${csvUrl || "(url pending)"}
+
+` +
+        `Attached file IDs: ${fileIds.join(", ")}
+` +
         `Folder: ${folderId ? `folderId=${folderId}` : `folderPath=${folderPath}`}`,
-      // HubSpot activities use semicolon-separated attachment IDs in hs_attachment_ids
       hs_attachment_ids: fileIds.join(";"),
     };
 
@@ -222,7 +296,6 @@ export async function handler(event) {
     return String(res.json.id);
   }
 
-  // IMPORTANT: Associations v4 uses singular object types like "note" and "deal"
   async function associateDefault(fromType, fromId, toType, toId) {
     const url =
       `https://api.hubapi.com/crm/v4/objects/${encodeURIComponent(fromType)}/${encodeURIComponent(fromId)}` +
@@ -236,10 +309,11 @@ export async function handler(event) {
   }
 
   try {
-    const body = JSON.parse(event.body || "{}");
+    const portalMeta = await getPortalMeta();
 
+    const body = JSON.parse(event.body || "{}");
     const lead_id = String(body.lead_id || "").trim();
-    const deal_id = String(body.deal_id || "").trim();
+    let deal_id = String(body.deal_id || "").trim();
     const email = String(body.email || "").trim();
 
     const pdf_base64 = stripDataUrl(body.pdf_base64);
@@ -259,8 +333,43 @@ export async function handler(event) {
       return { statusCode: 400, headers: corsHeaders(event.headers?.origin), body: JSON.stringify({ error: "Missing csv_text" }) };
     }
 
-    // Reuse / recover if already present on deal
-    const deal = await readDealProps(deal_id);
+    // Confirm deal exists; if not, recover by lead_id
+    let recovered_deal_id = "";
+    let deal_lookup_attempts = [];
+
+    let dealRead = await readDealProps(deal_id);
+    if (!dealRead.ok && dealRead.status === 404) {
+      const rec = await searchDealByLeadId(lead_id);
+      deal_lookup_attempts = rec.attempts || [];
+      if (rec.dealId) {
+        recovered_deal_id = rec.dealId;
+        deal_id = rec.dealId;
+        dealRead = await readDealProps(deal_id);
+      }
+    }
+
+    if (!dealRead.ok) {
+      return {
+        statusCode: dealRead.status === 404 ? 404 : 502,
+        headers: corsHeaders(event.headers?.origin),
+        body: JSON.stringify({
+          error: "deal_not_found_or_unreadable",
+          message:
+            dealRead.status === 404
+              ? "Deal not found in this HubSpot portal for the current HUBSPOT_PRIVATE_APP_TOKEN. This usually means a portal/token mismatch (deal created in another portal)."
+              : "Failed to read deal from HubSpot.",
+          status: dealRead.status,
+          lead_id,
+          deal_id,
+          recovered_deal_id: recovered_deal_id || null,
+          deal_lookup_attempts,
+          portal: portalMeta ? { portalId: portalMeta.portalId, user: portalMeta.user } : null,
+          hubspot_detail: dealRead.json || dealRead.text || null
+        }),
+      };
+    }
+
+    const deal = dealRead.json;
     const leadStatus = String(deal?.properties?.lead_status || "").trim();
 
     const existingPdfId = String(deal?.properties?.deliverable_pdf_file_id || "").trim();
@@ -268,7 +377,7 @@ export async function handler(event) {
     let existingPdfUrl = String(deal?.properties?.deliverable_pdf_url || "").trim();
     let existingCsvUrl = String(deal?.properties?.deliverable_csv_url || "").trim();
 
-    // If files exist but URLs are missing, recover from Files API and patch deal
+    // Recover URLs if missing
     if ((existingPdfId && !existingPdfUrl) || (existingCsvId && !existingCsvUrl)) {
       const recoveredPdfUrl = existingPdfUrl || await getFileHostingUrl(existingPdfId);
       const recoveredCsvUrl = existingCsvUrl || await getFileHostingUrl(existingCsvId);
@@ -278,6 +387,7 @@ export async function handler(event) {
 
       if (existingPdfUrl) {
         await patchDealWithFallback(deal_id, {
+          lead_id,
           deliverable_pdf_url: existingPdfUrl,
           ...(existingCsvUrl ? { deliverable_csv_url: existingCsvUrl } : {}),
         });
@@ -293,17 +403,19 @@ export async function handler(event) {
           reused: true,
           deal_id,
           lead_id,
+          recovered_deal_id: recovered_deal_id || null,
+          deal_lookup_attempts,
           pdf_file_id: existingPdfId,
           csv_file_id: existingCsvId,
           pdf_url: existingPdfUrl,
           csv_url: existingCsvUrl || null,
           folder_used: folderId ? { folderId } : { folderPath },
           access: ACCESS,
+          portal: portalMeta ? { portalId: portalMeta.portalId } : null,
         }),
       };
     }
 
-    // If another invocation already started, avoid duplicate uploads
     if (!force && leadStatus === "Deliverables Processing") {
       return {
         statusCode: 202,
@@ -313,14 +425,17 @@ export async function handler(event) {
           processing: true,
           deal_id,
           lead_id,
+          recovered_deal_id: recovered_deal_id || null,
+          deal_lookup_attempts,
           message: "Deliverables are already processing for this deal. Retry shortly.",
           pdf_url: existingPdfUrl || null,
           csv_url: existingCsvUrl || null,
+          portal: portalMeta ? { portalId: portalMeta.portalId } : null,
         }),
       };
     }
 
-    await patchDealWithFallback(deal_id, { lead_status: "Deliverables Processing" });
+    await patchDealWithFallback(deal_id, { lead_id, lead_status: "Deliverables Processing" });
 
     const pdfBytes = Buffer.from(pdf_base64, "base64");
     const csvBytes = Buffer.from(csv_text, "utf8");
@@ -339,19 +454,25 @@ export async function handler(event) {
 
     try {
       noteId = await createNoteWithAttachments({ leadId: lead_id, fileIds, pdfUrl: pdfUp.url, csvUrl: csvUp.url });
-
-      // ✅ Correct v4 object types: note → deal
       if (noteId) await associateDefault("note", noteId, "deal", deal_id);
     } catch (e) {
       noteWarning = String(e?.message || e);
     }
 
     const desc =
-      `Visitor PDF URL: ${pdfUp.url}\nVisitor CSV URL: ${csvUp.url}\n` +
-      `PDF File ID: ${pdfUp.fileId}\nCSV File ID: ${csvUp.fileId}\n` +
-      (noteId ? `Note ID: ${noteId}\n` : "");
+      `Visitor PDF URL: ${pdfUp.url}
+Visitor CSV URL: ${csvUp.url}
+` +
+      `PDF File ID: ${pdfUp.fileId}
+CSV File ID: ${csvUp.fileId}
+` +
+      (noteId ? `Note ID: ${noteId}
+` : "") +
+      (recovered_deal_id ? `Recovered Deal ID: ${recovered_deal_id}
+` : "");
 
     const patch = await patchDealWithFallback(deal_id, {
+      lead_id,
       deliverable_pdf_file_id: pdfUp.fileId,
       deliverable_csv_file_id: csvUp.fileId,
       deliverable_pdf_url: pdfUp.url,
@@ -365,8 +486,10 @@ export async function handler(event) {
       headers: corsHeaders(event.headers?.origin),
       body: JSON.stringify({
         ok: true,
-        deal_id,
+        deal_id: patch.deal_id || deal_id,
         lead_id,
+        recovered_deal_id: recovered_deal_id || (patch.recovered ? patch.deal_id : null),
+        deal_lookup_attempts: patch.deal_lookup_attempts || deal_lookup_attempts,
         pdf_file_id: pdfUp.fileId,
         csv_file_id: csvUp.fileId,
         pdf_url: pdfUp.url,
@@ -378,6 +501,7 @@ export async function handler(event) {
         folder_used: folderId ? { folderId } : { folderPath },
         access: ACCESS,
         overwrite: OVERWRITE,
+        portal: portalMeta ? { portalId: portalMeta.portalId } : null,
       }),
     };
   } catch (err) {
