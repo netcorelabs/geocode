@@ -70,6 +70,10 @@ export async function handler(event) {
   const ACCESS = String(process.env.HUBSPOT_FILES_ACCESS || "PUBLIC_NOT_INDEXABLE").trim() || "PUBLIC_NOT_INDEXABLE";
   const OVERWRITE = String(process.env.HUBSPOT_FILES_OVERWRITE || "false").toLowerCase() === "true";
 
+  // Optional deal defaults if we must create a deal (fallback)
+  const DEAL_PIPELINE = String(process.env.HUBSPOT_DEAL_PIPELINE_ID || "").trim();
+  const DEAL_STAGE    = String(process.env.HUBSPOT_DEAL_STAGE_QUALIFIED || "").trim();
+
   const hsAuth = { Authorization: `Bearer ${HS_TOKEN}` };
 
   async function readText(res) {
@@ -122,39 +126,69 @@ export async function handler(event) {
         headers: { ...hsAuth, "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      attempts.push({ request: payload, status: r.status, ok: r.ok });
+      attempts.push({ request: payload, status: r.status, ok: r.ok, results: Array.isArray(r.json?.results) ? r.json.results.length : null });
       return r;
     };
 
-    // Attempt 1: filter on custom property "lead_id" == leadId (if it exists)
+    // Attempt 1: exact match on custom property lead_id (best)
     let r = await postSearch({
-      filterGroups: [{
-        filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }]
-      }],
+      filterGroups: [{ filters: [{ propertyName: "lead_id", operator: "EQ", value: leadId }] }],
       properties: ["dealname", "lead_id", "hs_object_id"],
       limit: 5,
       sorts: [{ propertyName: "createdate", direction: "DESCENDING" }]
     });
-
-    if (r.ok && Array.isArray(r.json?.results) && r.json.results.length) {
+    if (r.ok && Array.isArray(r.json?.results) && r.json.results[0]) {
       return { dealId: String(r.json.results[0].id || "").trim(), attempts };
     }
 
-    // Attempt 2: broad query search
+    // Attempt 2: dealname contains leadId (works even without custom property)
+    r = await postSearch({
+      filterGroups: [{ filters: [{ propertyName: "dealname", operator: "CONTAINS_TOKEN", value: leadId }] }],
+      properties: ["dealname", "lead_id", "hs_object_id"],
+      limit: 5,
+      sorts: [{ propertyName: "createdate", direction: "DESCENDING" }]
+    });
+    if (r.ok && Array.isArray(r.json?.results) && r.json.results[0]) {
+      return { dealId: String(r.json.results[0].id || "").trim(), attempts };
+    }
+
+    // Attempt 3: broad query (may depend on indexing)
     r = await postSearch({
       query: leadId,
       properties: ["dealname", "hs_object_id"],
       limit: 5
     });
-
-    if (r.ok && Array.isArray(r.json?.results) && r.json.results.length) {
+    if (r.ok && Array.isArray(r.json?.results) && r.json.results[0]) {
       return { dealId: String(r.json.results[0].id || "").trim(), attempts };
     }
 
     return { dealId: "", attempts };
   }
 
-  async function readDealProps(dealId) {
+  
+  async function createFallbackDeal({ lead_id, email }) {
+    const name = `HomeSecure Lead ${lead_id} | ${email}`;
+    const props = { dealname: name };
+
+    if (DEAL_PIPELINE) props.pipeline = DEAL_PIPELINE;
+    if (DEAL_STAGE) props.dealstage = DEAL_STAGE;
+
+    // Store lead_id in description for traceability even if custom property doesn't exist
+    props.description = `Lead ID: ${lead_id}\nEmail: ${email}\nCreated by upload-deliverables fallback`;
+
+    const r = await fetchJson("https://api.hubapi.com/crm/v3/objects/deals", {
+      method: "POST",
+      headers: { ...hsAuth, "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: props })
+    });
+
+    if (!r.ok || !r.json?.id) {
+      throw new Error(`Fallback deal create failed (${r.status}): ${r.text || JSON.stringify(r.json)}`);
+    }
+    return String(r.json.id);
+  }
+
+async function readDealProps(dealId) {
     const r = await fetchJson(
       `https://api.hubapi.com/crm/v3/objects/deals/${encodeURIComponent(dealId)}` +
         `?properties=deliverable_pdf_file_id,deliverable_csv_file_id,deliverable_pdf_url,deliverable_csv_url,lead_status,description,dealname`,
@@ -345,6 +379,37 @@ export async function handler(event) {
         recovered_deal_id = rec.dealId;
         deal_id = rec.dealId;
         dealRead = await readDealProps(deal_id);
+      }
+    }
+
+    if (!dealRead.ok) {
+      // If the provided deal_id (or recovered by lead_id) still isn't readable in THIS portal,
+      // we can create a fallback deal in this same portal so deliverables can be stored reliably.
+      if (dealRead.status === 404) {
+        try {
+          const createdDealId = await createFallbackDeal({ lead_id, email });
+          recovered_deal_id = createdDealId;
+          deal_id = createdDealId;
+          dealRead = await readDealProps(deal_id);
+        } catch (e) {
+          return {
+            statusCode: 404,
+            headers: corsHeaders(event.headers?.origin),
+            body: JSON.stringify({
+              error: "deal_not_found_or_unreadable",
+              message:
+                "Deal not found in this HubSpot portal for the current HUBSPOT_PRIVATE_APP_TOKEN, and fallback deal creation failed. This usually means a portal/token mismatch, or missing Deals scopes on the token.",
+              status: 404,
+              lead_id,
+              deal_id,
+              recovered_deal_id: recovered_deal_id || null,
+              deal_lookup_attempts,
+              portal: portalMeta ? { portalId: portalMeta.portalId, user: portalMeta.user } : null,
+              create_error: String(e?.message || e),
+              hubspot_detail: dealRead.json || dealRead.text || null
+            }),
+          };
+        }
       }
     }
 
